@@ -1,8 +1,8 @@
 {
   "files": [
-    "docs/source/authors.rst"
+    "docs/source/contributors.md"
   ],
-  "imageSize": 100,
+  "imageSize": 70,
   "commit": true,
   "contributors": [
     {
