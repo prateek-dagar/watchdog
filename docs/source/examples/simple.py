@@ -9,7 +9,6 @@ from watchdog.observers import Observer
 
 logging.basicConfig(level=logging.DEBUG)
 
-
 class MyEventHandler(events.FileSystemEventHandler):
     def on_any_event(self, event: events.FileSystemEvent) -> None:
         logging.info("Any event: %s", event)
