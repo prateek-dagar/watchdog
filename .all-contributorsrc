@@ -4,7 +4,19 @@
   ],
   "imageSize": 100,
   "commit": true,
-  "contributors": [],
+  "contributors": [
+    {
+      "login": "prateek-dagar",
+      "name": "Prateek Dagar",
+      "avatar_url": "https://avatars.githubusercontent.com/u/107306613?v=4",
+      "profile": "https://github.com/prateek-dagar",
+      "contributions": [
+        "doc",
+        "code",
+        "design"
+      ]
+    }
+  ],
   "contributorsPerLine": 7,
   "projectName": "watchdog",
   "projectOwner": "prateek-dagar",
