@@ -2,10 +2,25 @@ import os
 import glob
 import json
 import subprocess
+import sys
+
+
+def get_pr_number():
+    """Extract PR number from the GitHub event payload JSON file."""
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    if not event_path or not os.path.exists(event_path):
+        return None
+    try:
+        with open(event_path) as f:
+            event = json.load(f)
+        return str(event.get("pull_request", {}).get("number", "") or event.get("number", ""))
+    except Exception as e:
+        print(f"Error reading event payload: {e}")
+        return None
 
 
 def get_artifacts_map(repo, run_id):
-    """Fetch artifact name → download URL mapping from the GitHub API."""
+    """Fetch artifact name -> download URL mapping from the GitHub API."""
     artifacts_map = {}
     if not (repo and run_id):
         return artifacts_map
@@ -28,7 +43,7 @@ def get_artifacts_map(repo, run_id):
 
 
 def get_failed_jobs_map(repo, run_id):
-    """Fetch job name → log URL for jobs that did not succeed."""
+    """Fetch job name -> log URL for jobs that did not succeed."""
     jobs_map = {}
     if not (repo and run_id):
         return jobs_map
@@ -85,16 +100,12 @@ def main():
         is_failed = val.startswith("❌")
         if is_failed:
             # Try to find the matching failed job log URL
-            # Job names typically look like: "tox (ubuntu-latest, 3.13)"
-            job_key = None
-            for job_name, job_url in failed_jobs_map.items():
+            job_url = None
+            for job_name, url in failed_jobs_map.items():
                 if os_name in job_name and py_ver in job_name:
-                    job_key = job_url
+                    job_url = url
                     break
-            if job_key:
-                coverage_md = f"[{val}]({job_key})"
-            else:
-                coverage_md = val
+            coverage_md = f"[{val}]({job_url})" if job_url else val
         else:
             coverage_md = val
 
@@ -107,6 +118,10 @@ def main():
             report_md = "—"
 
         lines.append((os_name, py_ver, f"| {os_emoji} {os_name} | {py_ver} | {coverage_md} | {report_md} |"))
+
+    if not lines:
+        print("No coverage data found.")
+        sys.exit(1)
 
     # Sort results for a consistent table output
     lines.sort()
@@ -124,7 +139,10 @@ def main():
 
     # Post or update comment on Pull Request
     if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
-        pr_num = os.environ.get("GITHUB_EVENT_NUMBER")
+        pr_num = get_pr_number()
+        if not pr_num:
+            print("Could not determine PR number, skipping comment.")
+            return
 
         try:
             comments = subprocess.check_output([
@@ -145,6 +163,7 @@ def main():
                 print("Updated existing PR coverage comment.")
             except Exception as e:
                 print(f"Error updating PR comment: {e}")
+                sys.exit(1)
         else:
             try:
                 subprocess.run([
@@ -153,6 +172,7 @@ def main():
                 print("Created new PR coverage comment.")
             except Exception as e:
                 print(f"Error creating PR comment: {e}")
+                sys.exit(1)
 
 
 if __name__ == "__main__":
