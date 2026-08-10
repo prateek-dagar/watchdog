@@ -3,32 +3,62 @@ import glob
 import json
 import subprocess
 
+
+def get_artifacts_map(repo, run_id):
+    """Fetch artifact name → download URL mapping from the GitHub API."""
+    artifacts_map = {}
+    if not (repo and run_id):
+        return artifacts_map
+    try:
+        output = subprocess.check_output([
+            "gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts",
+            "-q", ".artifacts[] | {name: .name, id: .id}"
+        ]).decode().strip()
+        if output:
+            for line in output.split("\n"):
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                artifacts_map[item["name"]] = (
+                    f"https://github.com/{repo}/actions/runs/{run_id}/artifacts/{item['id']}"
+                )
+    except Exception as e:
+        print(f"Error fetching artifacts from GitHub API: {e}")
+    return artifacts_map
+
+
+def get_failed_jobs_map(repo, run_id):
+    """Fetch job name → log URL for jobs that did not succeed."""
+    jobs_map = {}
+    if not (repo and run_id):
+        return jobs_map
+    try:
+        output = subprocess.check_output([
+            "gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs",
+            "-q", '.jobs[] | {name: .name, id: .id, conclusion: .conclusion}'
+        ]).decode().strip()
+        if output:
+            for line in output.split("\n"):
+                if not line.strip():
+                    continue
+                job = json.loads(line)
+                if job.get("conclusion") in ("failure", "cancelled", None):
+                    jobs_map[job["name"]] = (
+                        f"https://github.com/{repo}/actions/runs/{run_id}/job/{job['id']}"
+                    )
+    except Exception as e:
+        print(f"Error fetching jobs from GitHub API: {e}")
+    return jobs_map
+
+
 def main():
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("GITHUB_RUN_ID", "")
-    
-    # Query GitHub API to get artifact URLs for this run
-    artifacts_map = {}
-    if repo and run_id:
-        try:
-            output = subprocess.check_output([
-                "gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts",
-                "-q", ".artifacts[] | {name: .name, id: .id}"
-            ]).decode().strip()
-            if output:
-                for line in output.split("\n"):
-                    if not line.strip():
-                        continue
-                    item = json.loads(line)
-                    art_name = item["name"]
-                    art_id = item["id"]
-                    # Construct direct web download link for the artifact zip
-                    artifacts_map[art_name] = f"https://github.com/{repo}/actions/runs/{run_id}/artifacts/{art_id}"
-        except Exception as e:
-            print(f"Error fetching artifacts from GitHub API: {e}")
+
+    artifacts_map = get_artifacts_map(repo, run_id)
+    failed_jobs_map = get_failed_jobs_map(repo, run_id)
 
     lines = []
-    # Search for all coverage percentage files downloaded from artifacts
     for path in glob.glob("coverage_pcts/coverage_pct_*"):
         folder_name = os.path.basename(path)
         # folder_name format: coverage_pct_<os>_<python_version>
@@ -37,37 +67,57 @@ def main():
             continue
         os_name = parts[2]
         py_ver = parts[3]
-        
+
         filepath = os.path.join(path, "coverage_percentage.txt")
         if not os.path.exists(filepath):
             continue
-            
+
         with open(filepath) as f:
             val = f.read().strip()
-            
+
         os_emoji = "🐧"
         if "macos" in os_name:
             os_emoji = "🍎"
         elif "windows" in os_name:
             os_emoji = "🪟"
-            
-        # Check if we have a matching HTML report artifact
+
+        # Build the coverage column — link to failed logs if tests failed
+        is_failed = val.startswith("❌")
+        if is_failed:
+            # Try to find the matching failed job log URL
+            # Job names typically look like: "tox (ubuntu-latest, 3.13)"
+            job_key = None
+            for job_name, job_url in failed_jobs_map.items():
+                if os_name in job_name and py_ver in job_name:
+                    job_key = job_url
+                    break
+            if job_key:
+                coverage_md = f"[{val}]({job_key})"
+            else:
+                coverage_md = val
+        else:
+            coverage_md = val
+
+        # Build the HTML report column
         html_art_name = f"coverage_html_{os_name}_{py_ver}"
         report_link = artifacts_map.get(html_art_name, "")
-        report_md = f"[Download HTML]({report_link})" if report_link else "N/A"
-            
-        lines.append((os_name, py_ver, f"| {os_emoji} {os_name} | {py_ver} | {val} | {report_md} |"))
+        if report_link and not is_failed:
+            report_md = f"[📥 Download]({report_link})"
+        else:
+            report_md = "—"
+
+        lines.append((os_name, py_ver, f"| {os_emoji} {os_name} | {py_ver} | {coverage_md} | {report_md} |"))
 
     # Sort results for a consistent table output
     lines.sort()
-    
+
     summary_content = "## 📊 Test Coverage Summary\n\n"
-    summary_content += "| OS | Python Version | Coverage | HTML Report |\n"
+    summary_content += "| OS | Python | Coverage | Report |\n"
     summary_content += "| :--- | :--- | :--- | :--- |\n"
     for _, _, line in lines:
         summary_content += line + "\n"
-        
-    # Write to GitHub step summary if environment variable exists
+
+    # Write to GitHub step summary
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "summary.md")
     with open(summary_path, "a") as f:
         f.write(summary_content)
@@ -75,9 +125,8 @@ def main():
     # Post or update comment on Pull Request
     if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
         pr_num = os.environ.get("GITHUB_EVENT_NUMBER")
-        
+
         try:
-            # Check for existing comment by GHA bot containing the summary header
             comments = subprocess.check_output([
                 "gh", "pr", "view", pr_num, "--json", "comments", "-q",
                 '.comments[] | select(.body | contains("Test Coverage Summary")) | .id'
@@ -86,9 +135,8 @@ def main():
         except Exception as e:
             print(f"Error querying PR comments: {e}")
             comment_id = ""
-            
+
         if comment_id:
-            # Update the existing comment
             try:
                 subprocess.run([
                     "gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment_id}",
@@ -98,7 +146,6 @@ def main():
             except Exception as e:
                 print(f"Error updating PR comment: {e}")
         else:
-            # Create a new comment
             try:
                 subprocess.run([
                     "gh", "pr", "comment", pr_num, "--body-file", summary_path
@@ -106,6 +153,7 @@ def main():
                 print("Created new PR coverage comment.")
             except Exception as e:
                 print(f"Error creating PR comment: {e}")
+
 
 if __name__ == "__main__":
     main()
