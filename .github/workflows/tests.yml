@@ -92,3 +92,46 @@ jobs:
 
       - name: Run tests
         run: python -m tox -q -e py
+
+      - name: Install coverage tool
+        run: python -m pip install coverage
+
+      - name: Generate coverage reports
+        run: |
+          python -m coverage json
+          python -m coverage html
+
+      - name: Extract coverage percentage
+        run: python .github/scripts/extract_coverage.py
+
+      - name: Upload coverage percentage
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: coverage_pct_${{ matrix.os.matrix }}_${{ matrix.python }}
+          path: coverage_percentage.txt
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: coverage_html_${{ matrix.os.matrix }}_${{ matrix.python }}
+          path: htmlcov
+
+  coverage_summary:
+    needs: [tox, quality]
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download all coverage percentages
+        uses: actions/download-artifact@65a9edc5881444af0b9093a5e628f2fe47ea3b2e # v4.1.7
+        with:
+          pattern: coverage_pct_*
+          path: coverage_pcts/
+
+      - name: Build Summary Table
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python .github/scripts/build_coverage_summary.py
