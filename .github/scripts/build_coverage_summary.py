@@ -152,21 +152,27 @@ def main():
             print("Could not determine PR number, skipping comment.")
             return
 
+        # Use REST API to find existing coverage comment (returns numeric IDs)
+        comment_id = ""
         try:
-            comments = subprocess.check_output([
-                "gh", "pr", "view", pr_num, "--json", "comments", "-q",
-                '.comments[] | select(.body | contains("Test Coverage Summary")) | .id'
-            ]).decode().strip().split("\n")
-            comment_id = comments[0].strip() if comments and comments[0].strip() else ""
+            output = subprocess.check_output([
+                "gh", "api", f"repos/{repo}/issues/{pr_num}/comments",
+                "-q", '.[] | select(.body | contains("Test Coverage Summary")) | .id'
+            ]).decode().strip()
+            if output:
+                comment_id = output.split("\n")[0].strip()
         except Exception as e:
             print(f"Error querying PR comments: {e}")
-            comment_id = ""
+
+        # Read summary content for the comment body
+        with open(summary_path) as f:
+            body_content = f.read()
 
         if comment_id:
             try:
                 subprocess.run([
                     "gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{comment_id}",
-                    "-F", f"body=@{summary_path}"
+                    "-f", f"body={body_content}"
                 ], check=True)
                 print("Updated existing PR coverage comment.")
             except Exception as e:
