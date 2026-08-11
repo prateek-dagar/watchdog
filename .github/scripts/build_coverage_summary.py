@@ -97,14 +97,17 @@ def main():
             os_emoji = "🪟"
 
         # Build the coverage column — link to failed logs if tests failed
-        is_failed = val.startswith("❌")
+        # Determine failure either from the coverage file marker or from a failed job in the matrix
+        job_failed = any(os_name in name and py_ver in name for name in failed_jobs_map)
+        is_failed = val.startswith("❌") or job_failed
         if is_failed:
-            # Try to find the matching failed job log URL
+            # Prefer a link to the failed job log if we can find it
             job_url = None
-            for job_name, url in failed_jobs_map.items():
-                if os_name in job_name and py_ver in job_name:
-                    job_url = url
-                    break
+            if job_failed:
+                for job_name, url in failed_jobs_map.items():
+                    if os_name in job_name and py_ver in job_name:
+                        job_url = url
+                        break
             coverage_md = f"[{val}]({job_url})" if job_url else val
         else:
             coverage_md = val
@@ -136,6 +139,11 @@ def main():
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "summary.md")
     with open(summary_path, "a") as f:
         f.write(summary_content)
+
+    # If any matrix entry failed, fail the step so the workflow is marked failed
+    any_failed = any(val.startswith("❌") or any(os_name in name and py_ver in name for name in failed_jobs_map) for os_name, py_ver, _ in lines)
+    if any_failed:
+        sys.exit(1)
 
     # Post or update comment on Pull Request
     if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
