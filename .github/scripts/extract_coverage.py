@@ -1,6 +1,14 @@
+import os
 import json
 
 def main():
+    outcome = os.environ.get("TESTS_OUTCOME", "success")
+    if outcome != "success":
+        print(f"Tests failed with outcome: {outcome}")
+        with open("coverage_percentage.txt", "w") as f:
+            f.write("❌ Failed")
+        return
+
     try:
         with open("coverage.json") as f:
             data = json.load(f)

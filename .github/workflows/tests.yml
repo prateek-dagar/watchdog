@@ -91,6 +91,7 @@ jobs:
         run: python -m pip install tox
 
       - name: Run tests
+        id: run_tests
         run: python -m tox -q -e py
 
       - name: Install coverage tool
@@ -105,6 +106,8 @@ jobs:
 
       - name: Extract coverage percentage
         if: always()
+        env:
+          TESTS_OUTCOME: ${{ steps.run_tests.outcome }}
         run: python .github/scripts/extract_coverage.py
 
       - name: Upload coverage percentage
@@ -112,7 +115,9 @@ jobs:
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
           name: coverage_pct_${{ matrix.os.matrix }}_${{ matrix.python }}
-          path: coverage_percentage.txt
+          path: |
+            coverage_percentage.txt
+            coverage.json
 
       - name: Upload HTML coverage report
         if: always()
@@ -126,7 +131,10 @@ jobs:
     needs: [tox, quality]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
+      actions: read
+      statuses: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
