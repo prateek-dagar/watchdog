@@ -302,7 +302,18 @@ class PatternMatchingEventHandler(FileSystemEventHandler):
         ignore_patterns: list[str] | None = None,
         ignore_directories: bool = False,
         case_sensitive: bool = False,
-    ):
+    ) -> None:
+        """Initializer for PatternMatchingEventHandler.
+
+        :param patterns:
+            Patterns to allow matching event paths.
+        :param ignore_patterns:
+            Patterns to ignore matching event paths.
+        :param ignore_directories:
+            ``True`` if directory events should be ignored; ``False`` otherwise.
+        :param case_sensitive:
+            ``True`` if path names should be matched case-sensitively; ``False`` otherwise.
+        """
         super().__init__()
 
         self._patterns = patterns
@@ -377,7 +388,18 @@ class RegexMatchingEventHandler(FileSystemEventHandler):
         ignore_regexes: list[str] | None = None,
         ignore_directories: bool = False,
         case_sensitive: bool = False,
-    ):
+    ) -> None:
+        """Initializer for RegexMatchingEventHandler.
+
+        :param regexes:
+            Regular expressions to allow matching event paths.
+        :param ignore_regexes:
+            Regular expressions to ignore matching event paths.
+        :param ignore_directories:
+            ``True`` if directory events should be ignored; ``False`` otherwise.
+        :param case_sensitive:
+            ``True`` if path names should be matched case-sensitively; ``False`` otherwise.
+        """
         super().__init__()
 
         if regexes is None:
