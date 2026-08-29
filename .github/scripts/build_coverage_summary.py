@@ -97,17 +97,21 @@ def get_latest_success_run_id(repo, branch):
 
 
 def get_pr_files(repo, pr_num):
-    """Get list of filenames modified in the PR."""
-    files = []
+    """Get mapping of filename -> status ('added', 'modified', etc.) in the PR."""
+    files = {}
     if not (repo and pr_num):
         return files
     try:
         output = subprocess.check_output([
             "gh", "api", f"repos/{repo}/pulls/{pr_num}/files",
-            "-q", ".[].filename"
+            "-q", '.[] | {filename: .filename, status: .status}'
         ]).decode().strip()
         if output:
-            files = [line.strip() for line in output.split("\n") if line.strip()]
+            for line in output.split("\n"):
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                files[item["filename"]] = item.get("status", "modified")
     except Exception as e:
         print(f"Error fetching PR files: {e}")
     return files
@@ -203,17 +207,22 @@ def parse_percentage(val_str):
 def build_file_coverage_table(pr_files, current_file_cov, base_file_cov):
     """Build markdown table for modified files coverage."""
     rows = []
-    for filepath in sorted(pr_files):
+    for filepath in sorted(pr_files.keys()):
+        status = pr_files[filepath]
         curr_pct = next((pct for k, pct in current_file_cov.items() if k.endswith(filepath) or filepath.endswith(k)), None)
         base_pct = next((pct for k, pct in base_file_cov.items() if k.endswith(filepath) or filepath.endswith(k)), None)
         if curr_pct is None:
             continue
         curr_str = f"{curr_pct:.2f}%"
         base_str = f"{base_pct:.2f}%" if base_pct is not None else "—"
-        diff_str = "🟢 New File"
-        if base_pct is not None:
+        
+        if status == "added":
+            diff_str = "🟢 New File"
+        elif base_pct is not None:
             diff = curr_pct - base_pct
             diff_str = f"🟢 +{diff:.2f}%" if diff > 0 else (f"🔴 {diff:.2f}%" if diff < 0 else "⚪ no change")
+        else:
+            diff_str = "—"
         rows.append(f"| `{filepath}` | {base_str} | {curr_str} | {diff_str} |")
     if not rows:
         return ""
