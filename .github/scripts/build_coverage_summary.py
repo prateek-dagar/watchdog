@@ -26,7 +26,7 @@ def get_artifacts_map(repo, run_id):
         return artifacts_map
     try:
         output = subprocess.check_output([
-            "gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts",
+            "gh", "api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/artifacts",
             "-q", ".artifacts[] | {name: .name, id: .id}"
         ]).decode().strip()
         if output:
@@ -49,7 +49,7 @@ def get_failed_jobs_map(repo, run_id):
         return jobs_map
     try:
         output = subprocess.check_output([
-            "gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs",
+            "gh", "api", "--paginate", f"repos/{repo}/actions/runs/{run_id}/jobs",
             "-q", '.jobs[] | {name: .name, id: .id, conclusion: .conclusion}'
         ]).decode().strip()
         if output:
