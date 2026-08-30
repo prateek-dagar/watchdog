@@ -4,6 +4,7 @@ import os
 import os.path
 from queue import Empty, Queue
 from time import sleep
+from unittest.mock import patch
 
 import pytest
 
@@ -127,3 +128,19 @@ def test_root_deleted(event_queue, emitter):
 
     # The emitter is automatically stopped, with no error
     assert not emitter.should_keep_running()
+
+
+def test_windows_emitter_on_thread_stop_idempotent(emitter):
+    """Ensure on_thread_stop clears _whandle and is idempotent.
+    See https://github.com/gorakhargosh/watchdog/issues/1132
+    """
+    emitter._whandle = 12345  # Dummy handle
+
+    with patch("watchdog.observers.winapi._close_directory_handle") as mock_close:
+        emitter.on_thread_stop()
+        assert mock_close.call_count == 1
+        assert emitter._whandle is None
+
+        # Second call must be a safe no-op
+        emitter.on_thread_stop()
+        assert mock_close.call_count == 1
