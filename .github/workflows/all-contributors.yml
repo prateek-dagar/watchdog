@@ -52,7 +52,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "docs: add @${{ steps.parse_comment.outputs.username }} to contributors"
+          commit-message: "docs: add @${{ steps.parse_comment.outputs.username }} to contributors [skip ci]"
           title: "docs: add @${{ steps.parse_comment.outputs.username }} to contributors"
           body: "Automated PR created in response to comment: ${{ github.event.comment.html_url }}"
           branch: "all-contributors/add-${{ steps.parse_comment.outputs.username }}"
