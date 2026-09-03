@@ -949,6 +949,9 @@ static struct PyModuleDef watchdog_fsevents_module = {
  */
 PyMODINIT_FUNC
 PyInit__watchdog_fsevents(void){
+#ifdef Py_GIL_DISABLED
+    PyUnstable_Module_SetGIL(&watchdog_fsevents_module, Py_MOD_GIL_NOT_USED);
+#endif
     G_RETURN_NULL_IF(PyType_Ready(&NativeEventType) < 0);
     PyObject *module = PyModule_Create(&watchdog_fsevents_module);
     G_RETURN_NULL_IF_NULL(module);

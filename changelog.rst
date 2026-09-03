@@ -14,6 +14,7 @@ Changelog
 
 **Other Changes**
 
+- [fsevents] Enable free-threading support on Python 3.13t and 3.14t. (`#1140 <https://github.com/gorakhargosh/watchdog/issues/1140>`__)
 - [docs] ``FileSystemEvent`` no longer claims to be immutable; its fields stay writable and the hash is derived from them, so mutating an event held in a dict or set strands it there. (`#1240 <https://github.com/gorakhargosh/watchdog/issues/1240>`__)
 - [docs] Note that ``FileClosedEvent``, ``FileClosedNoWriteEvent`` and ``FileOpenedEvent``, and their ``on_closed()``, ``on_closed_no_write()`` and ``on_opened()`` handlers, are emitted only by ``InotifyObserver`` on Linux. (`#1235 <https://github.com/gorakhargosh/watchdog/pull/1235>`__)
 - [windows] Event file names are decoded as UTF-16LE, so a name starting with U+FEFF or U+FFFE no longer reports the wrong path. (`#1228 <https://github.com/gorakhargosh/watchdog/pull/1228>`__)
