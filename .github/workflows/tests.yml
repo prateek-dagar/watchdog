@@ -30,7 +30,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install tox
+        run: python -m pip install tox tox-uv
 
       - name: Run linters
         run: python -m tox -q -e types,lint
@@ -89,7 +89,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: python -m pip install tox
+        run: python -m pip install tox tox-uv
 
       - name: Run tests
         run: python -m tox -q -e py
