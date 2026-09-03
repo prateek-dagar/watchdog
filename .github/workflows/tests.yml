@@ -47,18 +47,10 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - name: Linux
-            matrix: linux
-            emoji: 🐧
-            runs-on: [ubuntu-latest]
           - name: macOS
             matrix: macos
             emoji: 🍎
             runs-on: [macos-latest]
-          - name: Windows
-            matrix: windows
-            emoji: 🪟
-            runs-on: [windows-latest]
         python:
           - "3.9"
           - "3.10"
