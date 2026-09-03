@@ -260,18 +260,6 @@ PyObject *thread_to_run_loop = NULL;
 PyObject *watch_to_stream = NULL;
 
 
-/**
- * PyCapsule destructor.
- */
-static void watchdog_pycapsule_destructor(PyObject *ptr)
-{
-    void *p = PyCapsule_GetPointer(ptr, NULL);
-    if (p) {
-        PyMem_Free(p);
-    }
-}
-
-
 
 /**
  * Converts a ``CFStringRef`` to a Python string object.
@@ -651,18 +639,20 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_RuntimeError, "Failed creating fsevent stream");
         return NULL;
     }
-    value = PyCapsule_New(stream_ref, NULL, watchdog_pycapsule_destructor);
-    if (!value || !PyCapsule_IsValid(value, NULL)) {
+    PyObject *stream_capsule = PyCapsule_New(stream_ref, NULL, NULL);
+    if (!stream_capsule || !PyCapsule_IsValid(stream_capsule, NULL)) {
         PyMem_Del(stream_callback_info_ref);
         FSEventStreamInvalidate(stream_ref);
         FSEventStreamRelease(stream_ref);
         return NULL;
     }
-    PyDict_SetItem(watch_to_stream, watch, value);
+    PyDict_SetItem(watch_to_stream, watch, stream_capsule);
+    Py_DECREF(stream_capsule);
 
     /* Get a reference to the runloop for the emitter thread
      * or to the current runloop. */
-    int res = PyDict_GetItemRef(thread_to_run_loop, emitter_thread, &value);
+    PyObject *run_loop_capsule = NULL;
+    int res = PyDict_GetItemRef(thread_to_run_loop, emitter_thread, &run_loop_capsule);
     if (res == 0)
     {
         run_loop_ref = CFRunLoopGetCurrent();
@@ -675,7 +665,8 @@ watchdog_add_watch(PyObject *self, PyObject *args)
     }
     else
     {
-        run_loop_ref = PyCapsule_GetPointer(value, NULL);
+        run_loop_ref = PyCapsule_GetPointer(run_loop_capsule, NULL);
+        Py_DECREF(run_loop_capsule);
     }
 
     /* Schedule the stream with the obtained runloop. */
@@ -699,11 +690,9 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         // There's no documentation on _why_ this might fail - "it ought to always succeed". But if it fails the
         // documentation says to "fall back to performing recursive scans of the directories [...] as appropriate".
         PyErr_SetString(PyExc_SystemError, "Cannot start fsevents stream. Use a kqueue or polling observer instead.");
-        Py_XDECREF(value);
         return NULL;
     }
 
-    Py_XDECREF(value);
     Py_INCREF(Py_None);
     return Py_None;
 }
@@ -713,7 +702,7 @@ PyDoc_STRVAR(watchdog_read_events__doc__,
              MODULE_NAME ".read_events(emitter_thread) -> None\n\
 Blocking function that runs an event loop associated with an emitter thread.\n\n\
 :param emitter_thread:\n\
-    The emitter thread for which the event loop will be run.\n");
+    The thread for which the event loop will be stopped.\n");
 static PyObject *
 watchdog_read_events(PyObject *self, PyObject *args)
 {
@@ -735,7 +724,7 @@ watchdog_read_events(PyObject *self, PyObject *args)
     if (res == 0)
     {
         run_loop_ref = CFRunLoopGetCurrent();
-        value = PyCapsule_New(run_loop_ref, NULL, watchdog_pycapsule_destructor);
+        value = PyCapsule_New(run_loop_ref, NULL, NULL);
         PyDict_SetItem(thread_to_run_loop, emitter_thread, value);
         Py_INCREF(emitter_thread);
         Py_INCREF(value);

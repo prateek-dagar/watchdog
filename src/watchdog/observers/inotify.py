@@ -420,9 +420,10 @@ class InotifyEmitter(EventEmitter):
         )
 
     def on_thread_stop(self) -> None:
-        if self._inotify is not None:
-            self._inotify.deactivate()
-            self._inotify = None
+        with self._lock:
+            if self._inotify is not None:
+                self._inotify.deactivate()
+                self._inotify = None
 
     def queue_events(self, timeout: float, *, full_events: bool = False) -> None:
         # If "full_events" is true, then the method will report unmatched move events as separate events
