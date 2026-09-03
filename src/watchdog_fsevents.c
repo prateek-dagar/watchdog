@@ -377,11 +377,8 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
     PyObject *py_event_ids = NULL;
     PyObject *py_event_paths = NULL;
     PyObject *py_event_inodes = NULL;
-    PyThreadState *saved_thread_state = NULL;
-
-    /* Acquire interpreter lock and save original thread state. */
+    /* Acquire interpreter lock for the current background callback thread. */
     PyGILState_STATE gil_state = PyGILState_Ensure();
-    saved_thread_state = PyThreadState_Swap(stream_callback_info_ref->thread_state);
 
     /* Convert event flags and paths to Python ints and strings. */
     py_event_paths = PyList_New(num_events);
@@ -394,6 +391,7 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
         Py_XDECREF(py_event_inodes);
         Py_XDECREF(py_event_ids);
         Py_XDECREF(py_event_flags);
+        PyGILState_Release(gil_state);
         return /*NULL*/;
     }
     for (i = 0; i < num_events; ++i)
@@ -420,6 +418,7 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
             Py_DECREF(py_event_inodes);
             Py_DECREF(py_event_ids);
             Py_DECREF(py_event_flags);
+            PyGILState_Release(gil_state);
             return /*NULL*/;
         }
         PyList_SET_ITEM(py_event_paths, i, path);
@@ -450,8 +449,7 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
     /* Clean up callback result reference */
     Py_XDECREF(callback_result);
 
-    /* Release the lock and restore thread state. */
-    PyThreadState_Swap(saved_thread_state);
+    /* Release interpreter lock. */
     PyGILState_Release(gil_state);
 }
 
