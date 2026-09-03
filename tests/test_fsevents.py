@@ -340,4 +340,4 @@ def test_free_threading_support() -> None:
     # On free-threaded CPython builds, sys._is_gil_enabled() returns False
     # and importing modules without support re-enables the GIL.
     if hasattr(sys, "_is_gil_enabled") and getattr(sys, "_is_gil_disabled", False):
-        assert not sys._is_gil_enabled(), "_watchdog_fsevents re-enabled the GIL unexpectedly"
+        assert not sys._is_gil_enabled(), "_watchdog_fsevents re-enabled the GIL unexpectedly"  # noqa: SLF001
