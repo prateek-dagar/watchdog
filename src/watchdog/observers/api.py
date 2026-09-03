@@ -90,9 +90,9 @@ class ObservedWatch:
         return self._event_filter
 
     @property
-    def key(self) -> tuple[str, bool, frozenset[type[FileSystemEvent]] | None]:
-        """A tuple key identifying the watch (path, recursive, event_filter)."""
-        return self.path, self.is_recursive, self.event_filter
+    def key(self) -> tuple[str, bool, frozenset[type[FileSystemEvent]] | None, bool]:
+        """A tuple key identifying the watch (path, recursive, event_filter, follow_symlink)."""
+        return self.path, self.is_recursive, self.event_filter, self.follow_symlink
 
     def __eq__(self, watch: object) -> bool:
         if not isinstance(watch, ObservedWatch):
@@ -452,7 +452,10 @@ class BaseObserver(EventDispatcher):
             # To allow unschedule/stop and safe removal of event handlers
             # within event handlers itself, check if the handler is still
             # registered after every dispatch.
-            for handler in self._handlers[watch].copy():
-                if handler in self._handlers[watch]:
+            # Use .get() rather than indexing: _handlers is a defaultdict, so
+            # indexing it here would resurrect a watch that unschedule() removed
+            # but whose events were already queued.
+            for handler in list(self._handlers.get(watch, ())):
+                if handler in self._handlers.get(watch, ()):
                     handler.dispatch(event)
         event_queue.task_done()
