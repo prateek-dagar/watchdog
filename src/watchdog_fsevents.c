@@ -365,7 +365,9 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
     PyObject *py_event_ids = NULL;
     PyObject *py_event_paths = NULL;
     PyObject *py_event_inodes = NULL;
-    /* Acquire interpreter lock for the current background callback thread. */
+    /* Acquire Python thread state and lock for this background FSEvents callback thread.
+     * In free-threaded Python (PEP 703), PyGILState_Ensure attaches the thread safely
+     * without requiring legacy PyThreadState_Swap. */
     PyGILState_STATE gil_state = PyGILState_Ensure();
 
     /* Convert event flags and paths to Python ints and strings. */
@@ -639,6 +641,8 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_RuntimeError, "Failed creating fsevent stream");
         return NULL;
     }
+    /* Wrap the native stream ref in a PyCapsule without custom destructor;
+     * native lifecycle is explicitly managed via watchdog_remove_watch / FSEventStreamRelease. */
     PyObject *stream_capsule = PyCapsule_New(stream_ref, NULL, NULL);
     if (!stream_capsule || !PyCapsule_IsValid(stream_capsule, NULL)) {
         PyMem_Del(stream_callback_info_ref);
@@ -724,6 +728,7 @@ watchdog_read_events(PyObject *self, PyObject *args)
     if (res == 0)
     {
         run_loop_ref = CFRunLoopGetCurrent();
+        /* Wrap the CFRunLoopRef in a PyCapsule without a custom destructor. */
         value = PyCapsule_New(run_loop_ref, NULL, NULL);
         PyDict_SetItem(thread_to_run_loop, emitter_thread, value);
         Py_INCREF(emitter_thread);
@@ -940,6 +945,7 @@ PyInit__watchdog_fsevents(void){
     PyObject *module = PyModule_Create(&watchdog_fsevents_module);
     G_RETURN_NULL_IF_NULL(module);
 #ifdef Py_GIL_DISABLED
+    /* Declare that this extension module supports free-threading (PEP 703). */
     PyUnstable_Module_SetGIL(module, Py_MOD_GIL_NOT_USED);
 #endif
     Py_INCREF(&NativeEventType);
