@@ -429,9 +429,9 @@ watchdog_FSEventStreamCallback(ConstFSEventStreamRef          stream_ref,
                               "OOOO", py_event_paths, py_event_inodes, py_event_flags, py_event_ids);
     if (G_IS_NULL(callback_result))
     {
-        if (G_NOT(PyErr_Occurred()))
+        if (PyErr_Occurred())
         {
-            PyErr_SetString(PyExc_ValueError, ERROR_CANNOT_CALL_CALLBACK);
+            PyErr_Print();
         }
         CFRunLoopStop(stream_callback_info_ref->run_loop_ref);
     }
@@ -743,14 +743,17 @@ watchdog_read_events(PyObject *self, PyObject *args)
     CFRunLoopRun();
     Py_END_ALLOW_THREADS;
 
-    /* Clean up state information. */
+    /* Clean up state information. If watchdog_stop() already deleted this entry
+     * concurrently on another thread, ignore the KeyError and finish cleanly. */
     if (PyDict_DelItem(thread_to_run_loop, emitter_thread) == 0)
     {
         Py_DECREF(emitter_thread);
-    } else {
-        Py_DECREF(value);
-        return NULL;
     }
+    else
+    {
+        PyErr_Clear();
+    }
+    Py_DECREF(value);
 
     Py_INCREF(Py_None);
     return Py_None;

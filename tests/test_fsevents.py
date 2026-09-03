@@ -114,9 +114,11 @@ def test_watcher_deletion_while_receiving_events_1(
     tmpdir = p()
 
     orig = FSEventsEmitter.events_callback
+    emitter = None
 
     def cb(*args):
-        FSEventsEmitter.stop(emitter)
+        if emitter is not None:
+            FSEventsEmitter.stop(emitter)
         orig(*args)
 
     with caplog.at_level(logging.ERROR), patch.object(FSEventsEmitter, "events_callback", new=cb):
