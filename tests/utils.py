@@ -4,7 +4,6 @@ import dataclasses
 import os
 import subprocess
 import sys
-import time
 from queue import Empty, Queue
 from typing import Any, Protocol
 
@@ -79,8 +78,6 @@ class Helper:
 
         self.emitters.append(emitter)
         emitter.start()
-        if platform.is_darwin():
-            time.sleep(0.1)
 
         return emitter
 
