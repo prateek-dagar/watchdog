@@ -254,6 +254,11 @@ static PyTypeObject NativeEventType = {
 PyObject *thread_to_run_loop = NULL;
 
 /**
+ * Set to keep track of threads for which stop() has been requested.
+ */
+PyObject *stopped_threads = NULL;
+
+/**
  * Dictionary to keep track of which stream
  * belongs to which watch.
  */
@@ -618,6 +623,14 @@ watchdog_add_watch(PyObject *self, PyObject *args)
                                           &emitter_thread, &watch,
                                           &python_callback, &paths_to_watch));
 
+    /* If stop() was already requested for this emitter thread, do not schedule the watch. */
+    int stopped = PySet_Contains(stopped_threads, emitter_thread);
+    if (stopped == 1) {
+        Py_RETURN_NONE;
+    } else if (stopped < 0) {
+        return NULL;
+    }
+
     /* Watch must not already be scheduled. */
     if(PyDict_Contains(watch_to_stream, watch) == 1) {
         PyErr_Format(PyExc_RuntimeError, "Cannot add watch %S - it is already scheduled", watch);
@@ -650,8 +663,6 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         FSEventStreamRelease(stream_ref);
         return NULL;
     }
-    PyDict_SetItem(watch_to_stream, watch, stream_capsule);
-    Py_DECREF(stream_capsule);
 
     /* Get a reference to the runloop for the emitter thread
      * or to the current runloop. */
@@ -662,6 +673,7 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         run_loop_ref = CFRunLoopGetCurrent();
     }
     else if (res < 0) {
+        Py_DECREF(stream_capsule);
         PyMem_Del(stream_callback_info_ref);
         FSEventStreamInvalidate(stream_ref);
         FSEventStreamRelease(stream_ref);
@@ -689,6 +701,7 @@ watchdog_add_watch(PyObject *self, PyObject *args)
     /* Start the event stream. */
     if (G_NOT(FSEventStreamStart(stream_ref)))
     {
+        Py_DECREF(stream_capsule);
         FSEventStreamInvalidate(stream_ref);
         FSEventStreamRelease(stream_ref);
         // There's no documentation on _why_ this might fail - "it ought to always succeed". But if it fails the
@@ -696,6 +709,18 @@ watchdog_add_watch(PyObject *self, PyObject *args)
         PyErr_SetString(PyExc_SystemError, "Cannot start fsevents stream. Use a kqueue or polling observer instead.");
         return NULL;
     }
+
+    /* Publish the stream to watch_to_stream only AFTER it is fully started and ready.
+     * This prevents remove_watch() on another thread from invalidating/freeing the
+     * stream while add_watch() is still setting it up. */
+    if (PyDict_SetItem(watch_to_stream, watch, stream_capsule) < 0) {
+        Py_DECREF(stream_capsule);
+        FSEventStreamStop(stream_ref);
+        FSEventStreamInvalidate(stream_ref);
+        FSEventStreamRelease(stream_ref);
+        return NULL;
+    }
+    Py_DECREF(stream_capsule);
 
     Py_INCREF(Py_None);
     return Py_None;
@@ -723,6 +748,16 @@ watchdog_read_events(PyObject *self, PyObject *args)
     PyEval_InitThreads();
 #endif
 
+    /* If stop() was already requested before entering read_events, exit immediately. */
+    int stopped = PySet_Contains(stopped_threads, emitter_thread);
+    if (stopped == 1) {
+        PySet_Discard(stopped_threads, emitter_thread);
+        Py_INCREF(Py_None);
+        return Py_None;
+    } else if (stopped < 0) {
+        return NULL;
+    }
+
     /* Allocate information and store thread state. */
     int res = PyDict_GetItemRef(thread_to_run_loop, emitter_thread, &value);
     if (res == 0)
@@ -738,6 +773,23 @@ watchdog_read_events(PyObject *self, PyObject *args)
         return NULL;
     }
 
+    /* Check again after registering the run loop in case stop() arrived concurrently. */
+    stopped = PySet_Contains(stopped_threads, emitter_thread);
+    if (stopped == 1) {
+        PySet_Discard(stopped_threads, emitter_thread);
+        if (PyDict_DelItem(thread_to_run_loop, emitter_thread) == 0) {
+            Py_DECREF(emitter_thread);
+        } else {
+            PyErr_Clear();
+        }
+        Py_DECREF(value);
+        Py_INCREF(Py_None);
+        return Py_None;
+    } else if (stopped < 0) {
+        Py_DECREF(value);
+        return NULL;
+    }
+
     /* No timeout, block until events. */
     Py_BEGIN_ALLOW_THREADS;
     CFRunLoopRun();
@@ -745,6 +797,7 @@ watchdog_read_events(PyObject *self, PyObject *args)
 
     /* Clean up state information. If watchdog_stop() already deleted this entry
      * concurrently on another thread, ignore the KeyError and finish cleanly. */
+    PySet_Discard(stopped_threads, emitter_thread);
     if (PyDict_DelItem(thread_to_run_loop, emitter_thread) == 0)
     {
         Py_DECREF(emitter_thread);
@@ -833,12 +886,20 @@ watchdog_stop(PyObject *self, PyObject *emitter_thread)
 {
     UNUSED(self);
     PyObject *value;
+
+    /* Record that stop() was requested for this emitter thread.
+     * If read_events() has not yet run or is about to run, it will see this
+     * flag and exit immediately without blocking in CFRunLoopRun(). */
+    if (PySet_Add(stopped_threads, emitter_thread) < 0) {
+        return NULL;
+    }
+
     int res = PyDict_GetItemRef(thread_to_run_loop, emitter_thread, &value);
     if (res < 0) {
         return NULL;
     }
     else if (res == 0) {
-      goto success;
+        goto success;
     }
 
     CFRunLoopRef run_loop_ref = PyCapsule_GetPointer(value, NULL);
@@ -893,6 +954,7 @@ static void
 watchdog_module_init(void)
 {
     thread_to_run_loop = PyDict_New();
+    stopped_threads = PySet_New(NULL);
     watch_to_stream = PyDict_New();
 }
 
