@@ -95,14 +95,14 @@ class FSEventsEmitter(EventEmitter):
             logger.debug("drop event %s", event)
 
     def _is_recursive_event(self, event: FileSystemEvent) -> bool:
-        src_path = event.src_path if event.is_directory else os.path.dirname(event.src_path)
+        src_path = os.path.dirname(event.src_path) if event.src_path != self._absolute_watch_path else event.src_path
         if src_path == self._absolute_watch_path:
             return False
 
         if isinstance(event, (FileMovedEvent, DirMovedEvent)):
             # when moving something into the watch path we must always take the dirname,
             # otherwise we miss out on `DirMovedEvent`s
-            dest_path = os.path.dirname(event.dest_path)
+            dest_path = os.path.dirname(event.dest_path) if event.dest_path != self._absolute_watch_path else event.dest_path
             if dest_path == self._absolute_watch_path:
                 return False
 

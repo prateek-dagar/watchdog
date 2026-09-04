@@ -331,3 +331,53 @@ def test_watchdog_recursive(p: P) -> None:
             observer.unschedule(watch)
         observer.stop()
         observer.join(1)
+
+
+def test_watchdog_non_recursive(p: P) -> None:
+    """See https://github.com/gorakhargosh/watchdog/issues/918 and #779"""
+    import os.path
+
+    from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
+
+    class Handler(FileSystemEventHandler):
+        def __init__(self):
+            super().__init__()
+            self.changes = []
+
+        def on_any_event(self, event):
+            self.changes.append(os.path.basename(event.src_path))
+
+    handler = Handler()
+    observer = Observer()
+
+    # Schedule non-recursive watch on directory
+    watches = [observer.schedule(handler, str(p("")), recursive=False)]
+    try:
+        observer.start()
+        time.sleep(0.1)
+
+        # File in root directory (should trigger event)
+        touch(p("root_file.txt"))
+
+        # Subdirectory (should trigger event for dir creation in root)
+        mkdir(p("sub_dir"))
+
+        # File inside subdirectory (should NOT trigger event since recursive=False)
+        touch(p("sub_dir", "nested_file.txt"))
+
+        # Wait for root events
+        expected = {"root_file.txt", "sub_dir"}
+        timeout_at = time.time() + 5
+        while not expected.issubset(handler.changes) and time.time() < timeout_at:
+            time.sleep(0.2)
+
+        assert "root_file.txt" in handler.changes
+        assert "sub_dir" in handler.changes
+        assert "nested_file.txt" not in handler.changes, f"Non-recursive watch received child event: {handler.changes}"
+    finally:
+        for watch in watches:
+            observer.unschedule(watch)
+        observer.stop()
+        observer.join(1)
+
