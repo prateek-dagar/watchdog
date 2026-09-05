@@ -9,7 +9,13 @@ build-backend = "setuptools.build_meta"
 [tool.cibuildwheel]
 skip = "*t*_i686"
 
+[tool.coverage.run]
+source = ["src/watchdog"]
+relative_files = true
+branch = true
+
 [tool.coverage.report]
+ignore_errors = true
 exclude_also = [
     "if TYPE_CHECKING:",
     "if __name__ == __main__:",
