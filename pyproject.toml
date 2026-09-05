@@ -16,6 +16,7 @@ branch = true
 
 [tool.coverage.report]
 ignore_errors = true
+show_missing = false
 exclude_also = [
     "if TYPE_CHECKING:",
     "if __name__ == __main__:",
