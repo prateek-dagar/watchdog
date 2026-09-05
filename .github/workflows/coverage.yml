@@ -21,12 +21,15 @@ jobs:
       matrix:
         os:
           - name: Linux
+            id: linux
             emoji: 🐧
             runs-on: ubuntu-latest
           - name: macOS
+            id: macos
             emoji: 🍎
             runs-on: macos-latest
           - name: Windows
+            id: windows
             emoji: 🪟
             runs-on: windows-latest
 
@@ -48,13 +51,13 @@ jobs:
       - name: Run tests with coverage
         run: |
           python -m pytest --cov=watchdog --cov-report=term
-          mv .coverage .coverage.${{ matrix.os.matrix }}
+          mv .coverage .coverage.${{ matrix.os.id }}
 
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
           name: coverage-${{ matrix.os.name }}
-          path: .coverage.${{ matrix.os.matrix }}
+          path: .coverage.${{ matrix.os.id }}
           include-hidden-files: true
 
   report-coverage:
@@ -81,7 +84,6 @@ jobs:
 
       - name: Combine coverage & generate file-wise report
         run: |
-          ls -la .coverage*
           python -m coverage combine
           python -m coverage xml -o coverage.xml
           echo "### 📊 Combined OS-level & File-wise Coverage Report" >> $GITHUB_STEP_SUMMARY
@@ -93,7 +95,7 @@ jobs:
         uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_COVERAGE_FILES: true
+          MERGE_COVERAGE_FILES: false
           MINIMUM_GREEN: 70
           MINIMUM_ORANGE: 50
           ANNOTATE_MISSING_LINES: true
