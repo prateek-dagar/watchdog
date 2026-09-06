@@ -49,47 +49,14 @@ jobs:
           python -m pip install -e '.[watchmedo]' -r requirements-tests.txt
 
       - name: Run tests with coverage
-        env:
-          COVERAGE_FILE: ".coverage.${{ matrix.os.id }}"
         run: |
           python -m pytest --cov=watchdog --cov-report=term
 
-      - name: Upload coverage data
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ matrix.os.name }}
-          path: .coverage.${{ matrix.os.id }}
-          include-hidden-files: true
-
-  report-coverage:
-    name: 📊 Combined Coverage & Summary
-    needs: test-coverage
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download all OS coverage data
-        uses: actions/download-artifact@v4
-        with:
-          pattern: coverage-*
-          merge-multiple: true
-
-      - name: Python Coverage Comment
-        id: coverage_comment
+      - name: Post OS-Specific Coverage Comment
         uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_COVERAGE_FILES: true
+          SUBPROJECT_ID: ${{ matrix.os.id }}
           MINIMUM_GREEN: 70
           MINIMUM_ORANGE: 50
           ANNOTATE_MISSING_LINES: true
-
-      - name: Store Pull Request comment to be posted
-        uses: actions/upload-artifact@v4
-        if: steps.coverage_comment.outputs.COMMENT_FILE_WRITTEN == 'true'
-        with:
-          name: python-coverage-comment-action
-          path: python-coverage-comment-action.txt
