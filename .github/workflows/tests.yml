@@ -51,10 +51,10 @@ jobs:
             matrix: macos
             emoji: 🍎
             runs-on: [macos-latest]
-          # - name: Windows
-          #   matrix: windows
-          #   emoji: 🪟
-          #   runs-on: [windows-latest]
+          - name: Windows
+            matrix: windows
+            emoji: 🪟
+            runs-on: [windows-latest]
         python:
           - "pypy-3.9"
           - "pypy-3.10"
