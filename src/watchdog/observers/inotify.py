@@ -420,24 +420,24 @@ class InotifyEmitter(EventEmitter):
         )
 
     def on_thread_stop(self) -> None:
-        if self._inotify is not None:
-            self._inotify.deactivate()
+        with self._lock:
+            inotify = self._inotify
             self._inotify = None
+        if inotify is not None:
+            inotify.deactivate()
 
     def queue_events(self, timeout: float, *, full_events: bool = False) -> None:
         # If "full_events" is true, then the method will report unmatched move events as separate events
         # This behavior is by default only called by a InotifyFullEmitter
-        if self._inotify is None:
-            logger.error("InotifyEmitter.queue_events() called when the thread is inactive")
-            return
         with self._lock:
-            if self._inotify is None:
-                logger.error("InotifyEmitter.queue_events() called when the thread is inactive")
-                return
-            event = self._inotify.read_event()
-            if event is None:
-                return
-            self.build_and_queue_event(event)
+            inotify = self._inotify
+        if inotify is None:
+            return
+
+        event = inotify.read_event()
+        if event is None:
+            return
+        self.build_and_queue_event(event)
 
     def build_and_queue_event(self, event: GroupedInotifyEvent, *, full_events: bool = False) -> None:
         """called for every event for each watch this callback is registered at."""
