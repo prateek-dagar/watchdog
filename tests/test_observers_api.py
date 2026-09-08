@@ -108,7 +108,6 @@ def test_event_dispatcher():
     event_dispatcher = TestableEventDispatcher()
     event_dispatcher.event_queue.put((event, watch))
     event_dispatcher.start()
-    time.sleep(1)
     event_dispatcher.stop()
     event_dispatcher.join()
 
@@ -130,7 +129,6 @@ def test_observer_basic():
     watch = observer.schedule(handler, "/foobar", recursive=True)
     observer.event_queue.put((FileModifiedEvent("/foobar"), watch))
     observer.start()
-    time.sleep(1)
     observer.unschedule_all()
     observer.stop()
     observer.join()
@@ -150,7 +148,6 @@ def test_observer_marks_every_queued_item_done():
     watch = observer.schedule(handler, "/foobar", recursive=True)
     observer.event_queue.put((FileModifiedEvent("/foobar"), watch))
     observer.start()
-    time.sleep(1)
     observer.unschedule_all()
     observer.stop()
     observer.join()
