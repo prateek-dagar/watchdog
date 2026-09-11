@@ -85,7 +85,7 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
 
-      - name: Calculate OS Breakdown & Combine Coverage
+      - name: Calculate OS Breakdown, Combine Coverage & Build Markdown Comment
         run: |
           python -c "
           import os, subprocess, json
@@ -105,61 +105,104 @@ jobs:
               else:
                   results[os_name] = {'emoji': emoji, 'pct': 'N/A', 'status': '❌ Missing'}
 
-          # Build dynamic OS breakdown table
-          os_md = '| OS | Status | Coverage |\n| :--- | :---: | :---: |\n'
-          for os_name, emoji, _ in os_list:
-              info = results[os_name]
-              os_md += f\"| {info['emoji']} {os_name} | {info['status']} | **{info['pct']}** |\n\"
-
-          with open('os_breakdown.txt', 'w') as f:
-              f.write(os_md)
-
           # Combine for global coverage
           subprocess.run(['coverage', 'combine'], check=False)
+          subprocess.run(['coverage', 'json', '-o', 'cov_global.json'], check=False)
+
+          global_pct = 'N/A'
+          files_table = ''
+          if os.path.exists('cov_global.json'):
+              try:
+                  with open('cov_global.json') as f:
+                      gd = json.load(f)
+                  global_pct = f\"{gd['totals']['percent_covered']:.2f}%\"
+
+                  # Build top uncovered files table
+                  files = []
+                  for filepath, finfo in gd.get('files', {}).items():
+                      rel_path = filepath
+                      if 'watchdog/' in filepath:
+                          rel_path = 'src/watchdog/' + filepath.split('watchdog/')[-1]
+                      pct = finfo['summary']['percent_covered']
+                      missing = finfo['summary']['missing_lines']
+                      stmts = finfo['summary']['num_statements']
+                      missing_ranges = finfo.get('missing_lines', [])
+                      if missing > 0:
+                          files.append((pct, rel_path, stmts, missing))
+
+                  files.sort(key=lambda x: (x[0], -x[3]))
+                  if files:
+                      files_table = '\n<details>\n<summary>📁 View Uncovered Files / Line Stats</summary>\n\n'
+                      files_table += '| File | Statements | Missing | Coverage |\n| :--- | :---: | :---: | :---: |\n'
+                      for pct, rpath, stmts, missing in files:
+                          files_table += f'| `{rpath}` | {stmts} | {missing} | **{pct:.1f}%** |\n'
+                      files_table += '\n</details>\n'
+              except Exception as e:
+                  print(f'Error reading global coverage json: {e}')
+
+          # Build final Markdown comment
+          comment = '## 📊 Python Test Coverage Report\n\n'
+          comment += f'### 🌐 Multi-OS Combined Coverage: **{global_pct}**\n\n'
+          comment += '### 🖥️ OS-Level Breakdown\n'
+          comment += '| OS | Status | Coverage |\n| :--- | :---: | :---: |\n'
+          for os_name, emoji, _ in os_list:
+              info = results[os_name]
+              comment += f\"| {info['emoji']} {os_name} | {info['status']} | **{info['pct']}** |\n\"
+
+          comment += files_table
+          comment += '\n\n<!-- watchdog-coverage-comment -->\n'
+
+          with open('coverage_comment.md', 'w') as f:
+              f.write(comment)
           "
-
-      - name: Python Coverage Comment
-        id: coverage_comment
-        uses: py-cov-action/python-coverage-comment-action@a05be3d2e8a6272d3ef5fb2840ab20368bb2eb71 # v4.3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MERGE_COVERAGE_FILES: false
-          MINIMUM_GREEN: 70
-          MINIMUM_ORANGE: 50
-          ANNOTATE_MISSING_LINES: true
-          COMMENT_TEMPLATE: |
-            ## Coverage report
-
-            {{ badges }}
-
-            ### 🖥️ OS-Level Breakdown
-            {% if os_breakdown %}
-            {{ os_breakdown }}
-            {% else %}
-            {% set os_file = "os_breakdown.txt" %}
-            {% endif %}
-
-            {{ coverage_table }}
-
-            {{ missing_lines_table }}
-
-            <!-- This comment was produced by python-coverage-comment-action -->
 
       - name: Add Coverage to Step Summary
         if: always()
         run: |
-          if [ -f os_breakdown.txt ]; then
-            echo "### 🖥️ OS-Level Breakdown" >> $GITHUB_STEP_SUMMARY
-            cat os_breakdown.txt >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f python-coverage-comment-action.txt ]; then
-            cat python-coverage-comment-action.txt >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage_comment.md ]; then
+            cat coverage_comment.md >> $GITHUB_STEP_SUMMARY
           fi
 
-      - name: Store Pull Request comment to be posted
-        uses: actions/upload-artifact@v4
-        if: steps.coverage_comment.outputs.COMMENT_FILE_WRITTEN == 'true'
+      - name: Post or Update PR Comment
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
         with:
-          name: python-coverage-comment-action
-          path: python-coverage-comment-action.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('coverage_comment.md')) {
+              console.log('No coverage_comment.md file found.');
+              return;
+            }
+            const body = fs.readFileSync('coverage_comment.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+            });
+
+            const botComment = comments.data.find(comment =>
+              comment.body && comment.body.includes('<!-- watchdog-coverage-comment -->')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: botComment.id,
+                body: body,
+              });
+              console.log('Updated existing coverage comment.');
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body: body,
+              });
+              console.log('Created new coverage comment.');
+            }
+
