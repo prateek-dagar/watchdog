@@ -105,7 +105,7 @@ jobs:
               else:
                   results[os_name] = {'emoji': emoji, 'pct': 'N/A', 'status': '❌ Missing'}
 
-          # Build OS breakdown table
+          # Build dynamic OS breakdown table
           os_md = '| OS | Status | Coverage |\n| :--- | :---: | :---: |\n'
           for os_name, emoji, _ in os_list:
               info = results[os_name]
@@ -133,18 +133,29 @@ jobs:
             {{ badges }}
 
             ### 🖥️ OS-Level Breakdown
+            {% if os_breakdown %}
+            {{ os_breakdown }}
+            {% else %}
             {% set os_file = "os_breakdown.txt" %}
-            | OS | Status | Coverage |
-            | :--- | :---: | :---: |
-            | 🐧 Linux | ✅ Passed | **53.12%** |
-            | 🍎 macOS | ✅ Passed | **34.69%** |
-            | 🪟 Windows | ✅ Passed | **46.25%** |
+            {% endif %}
 
             {{ coverage_table }}
 
             {{ missing_lines_table }}
 
             <!-- This comment was produced by python-coverage-comment-action -->
+
+      - name: Add Coverage to Step Summary
+        if: always()
+        run: |
+          if [ -f os_breakdown.txt ]; then
+            echo "### 🖥️ OS-Level Breakdown" >> $GITHUB_STEP_SUMMARY
+            cat os_breakdown.txt >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f python-coverage-comment-action.txt ]; then
+            cat python-coverage-comment-action.txt >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Store Pull Request comment to be posted
         uses: actions/upload-artifact@v4
