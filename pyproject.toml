@@ -14,6 +14,13 @@ source = ["src/watchdog"]
 relative_files = true
 branch = true
 
+[tool.coverage.paths]
+source = [
+    "src/watchdog",
+    "*/src/watchdog",
+    '*\\src\\watchdog',
+]
+
 [tool.coverage.report]
 ignore_errors = true
 show_missing = false
