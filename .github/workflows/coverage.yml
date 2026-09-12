@@ -137,7 +137,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           cat coverage_comment.md >> $GITHUB_STEP_SUMMARY
-          COMMENT_ID=$(gh pr view $PR_NUMBER --json comments --jq '.comments[] | select(.body | contains("<!-- watchdog-coverage-comment -->")) | .id' | head -n 1)
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" --jq '.[] | select(.body | contains("<!-- watchdog-coverage-comment -->")) | .id' | tail -n 1)
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" -X PATCH -F body=@coverage_comment.md
           else
