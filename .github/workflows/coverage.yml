@@ -70,14 +70,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
-
-      - name: Install coverage
-        run: python -m pip install "coverage[toml]"
+          fetch-depth: 0
 
       - name: Download all OS coverage data
         uses: actions/download-artifact@v4
@@ -85,23 +79,70 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
 
-      - name: Combine and Report OS Breakdown
+      - name: Generate Coverage Report
         run: |
-          coverage combine --keep
-          echo "### 🖥️ OS Coverage Breakdown" >> $GITHUB_STEP_SUMMARY
-          echo "| OS | Coverage |" >> $GITHUB_STEP_SUMMARY
-          echo "| :--- | :---: |" >> $GITHUB_STEP_SUMMARY
-          for os in linux macos windows; do
-            if [ -f ".coverage.$os" ]; then
-              pct=$(coverage report --data-file=".coverage.$os" | awk '/TOTAL/ {print $4}')
-              echo "| $os | $pct |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
+          pip install --break-system-packages "coverage[toml]"
+          coverage combine --keep .coverage.*
+          coverage json -o cov_global.json
 
-      - name: Coverage comment
-        id: coverage_comment
-        uses: py-cov-action/python-coverage-comment-action@v3
-        with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          python3 -c "
+          import os, json, subprocess, re
+
+          with open('cov_global.json') as f:
+              gd = json.load(f)
+          global_pct = f\"{gd['totals']['percent_covered']:.2f}%\"
+
+          os_rows = []
+          for name, emoji, fpath in [('Linux', '🐧', '.coverage.linux'), ('macOS', '🍎', '.coverage.macos'), ('Windows', '🪟', '.coverage.windows')]:
+              if os.path.exists(fpath):
+                  subprocess.run(['coverage', 'json', f'--data-file={fpath}', '-o', f'cov_{name}.json'], check=False)
+                  with open(f'cov_{name}.json') as f:
+                      os_rows.append(f'| {emoji} {name} | ✅ Passed | **{json.load(f)[\"totals\"][\"percent_covered\"]:.2f}%** |')
+              else:
+                  os_rows.append(f'| {emoji} {name} | ❌ Missing | N/A |')
+
+          diff_msg = '> _This PR does not seem to contain any modification to coverable code._\n\n'
+          try:
+              diff = subprocess.run(['git', 'diff', 'origin/master...HEAD'], capture_output=True, text=True).stdout
+              mod_lines, cur = {}, None
+              for line in diff.splitlines():
+                  if line.startswith('+++ b/'): cur = line[6:]
+                  elif line.startswith('@@') and cur:
+                      m = re.search(r'\+([0-9]+)(?:,([0-9]+))?', line)
+                      if m: mod_lines.setdefault(cur, set()).update(range(int(m.group(1)), int(m.group(1)) + (int(m.group(2)) if m.group(2) else 1)))
+              
+              tot, cov = 0, 0
+              for fp, finfo in gd.get('files', {}).items():
+                  rel = 'src/watchdog/' + fp.replace('\\\\', '/').split('src/watchdog/')[-1] if 'src/watchdog/' in fp else fp
+                  if rel in mod_lines:
+                      stmts = set(finfo.get('executed_lines', [])) | set(finfo.get('missing_lines', []))
+                      for l in mod_lines[rel]:
+                          if l in stmts:
+                              tot += 1
+                              if l in finfo.get('executed_lines', []): cov += 1
+              if tot > 0:
+                  diff_msg = f'### 🎯 PR Diff Coverage: **{(cov/tot)*100:.1f}%** ({cov}/{tot} statements covered)\n\n'
+          except Exception: pass
+
+          md = f'## 📊 Code Coverage Report\n\n### 🌐 Multi-OS Combined Coverage: **{global_pct}**\n\n{diff_msg}'
+          md += '### 🖥️ OS-Level Breakdown\n| OS | Status | Coverage |\n| :--- | :---: | :---: |\n' + '\n'.join(os_rows)
+          md += '\n\n<!-- watchdog-coverage-comment -->\n'
+          open('coverage_comment.md', 'w').write(md)
+          "
+
+      - name: Post or Update PR Comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cat coverage_comment.md >> $GITHUB_STEP_SUMMARY
+          COMMENT_ID=$(gh pr view $PR_NUMBER --json comments --jq '.comments[] | select(.body | contains("<!-- watchdog-coverage-comment -->")) | .id' | head -n 1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" -X PATCH -F body=@coverage_comment.md
+          else
+            gh pr comment $PR_NUMBER -F coverage_comment.md
+          fi
+
 
 
