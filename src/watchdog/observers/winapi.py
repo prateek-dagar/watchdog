@@ -454,7 +454,7 @@ class DirectoryChangeReader:
             assert self._reader_thread is None
             if self._should_stop:
                 return  # stop already called, do not start
-            self._reader_thread = threading.Thread(target=self._run)
+            self._reader_thread = threading.Thread(target=self._run, daemon=True)
         self._reader_thread.start()
         # Wait for empty bytes object, indicating reader thread has started.
         # This reduces the time window between this method returning and the
@@ -480,7 +480,7 @@ class DirectoryChangeReader:
                 # thread cannot race with us and close the handle before we
                 # make this call.
                 _cancel_handle_io(self._handle)
-        reader_thread.join()
+        reader_thread.join(timeout=5)
 
     def get_events(self, timeout: float) -> list[WinAPINativeEvent]:
         events = []
