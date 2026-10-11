@@ -55,6 +55,16 @@ def test_load_config_invalid(tmpdir):
     assert not os.path.exists(critical_dir)
 
 
+def wait_until(predicate, timeout=10, interval=0.05):
+    """Poll predicate every interval seconds until it returns true or timeout elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return predicate()
+
+
 def wait_for_marker_count(capfd, captured, marker, count, timeout=10):
     """Block until ``marker`` has been printed ``count`` times, or ``timeout`` elapses.
 
@@ -89,14 +99,14 @@ def make_dummy_script(tmpdir, n=10):
 def test_kill_auto_restart(tmpdir, capfd):
     script = make_dummy_script(tmpdir)
     a = AutoRestartTrick([sys.executable, script])
+    captured = []
     a.start()
-    time.sleep(3)
+    assert wait_for_marker_count(capfd, captured, "+++++ 0", 1), "process never started"
     a.stop()
-    cap = capfd.readouterr()
-    assert "+++++ 0" in cap.out
-    assert "+++++ 9" not in cap.out  # we killed the subprocess before the end
-    # in windows we seem to lose the subprocess stderr
-    # assert 'KeyboardInterrupt' in cap.err
+    captured.append(capfd.readouterr().out)
+    cap_out = "".join(captured)
+    assert "+++++ 0" in cap_out
+    assert "+++++ 9" not in cap_out  # we killed the subprocess before the end
 
 
 def test_auto_restart_stop_signal_is_delivered(tmpdir, capfd):
@@ -122,7 +132,7 @@ def test_auto_restart_stop_signal_is_delivered(tmpdir, capfd):
 
     trick = AutoRestartTrick([sys.executable, script])
     trick.start()
-    time.sleep(2)
+    time.sleep(0.5)
     trick.stop()
 
     cap = capfd.readouterr()
@@ -148,7 +158,7 @@ def test_shell_command_subprocess_termination_nowait(tmpdir):
     assert not trick.is_process_running()
     trick.on_any_event(FileModifiedEvent("foo/bar.baz"))
     assert trick.is_process_running()
-    time.sleep(5)
+    assert wait_until(lambda: not trick.is_process_running(), timeout=6)
     assert not trick.is_process_running()
 
 
@@ -162,7 +172,7 @@ def test_shell_command_subprocess_termination_not_happening_on_file_opened_event
     assert not trick.is_process_running()
     trick.on_any_event(FileOpenedEvent("foo/bar.baz"))
     assert not trick.is_process_running()
-    time.sleep(5)
+    time.sleep(1)
     assert not trick.is_process_running()
 
 
@@ -256,7 +266,10 @@ def test_auto_restart_subprocess_termination(tmpdir, capfd, restart_on_command_e
     script = make_dummy_script(tmpdir, n=2)
     trick = AutoRestartTrick([sys.executable, script], restart_on_command_exit=restart_on_command_exit)
     trick.start()
-    time.sleep(5)
+    if restart_on_command_exit:
+        assert wait_until(lambda: trick.restart_count >= 1, timeout=6)
+    else:
+        time.sleep(2.5)
     trick.stop()
     cap = capfd.readouterr()
     if restart_on_command_exit:
