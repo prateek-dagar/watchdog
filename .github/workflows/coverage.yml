@@ -1,0 +1,148 @@
+name: Coverage
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  test-coverage:
+    name: ${{ matrix.os.emoji }} ${{ matrix.os.name }}
+    runs-on: ${{ matrix.os.runs-on }}
+    if: "!startsWith(github.head_ref, 'all-contributors/') && !startsWith(github.event.pull_request.title, 'docs:')"
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - name: Linux
+            id: linux
+            emoji: 🐧
+            runs-on: ubuntu-latest
+          - name: macOS
+            id: macos
+            emoji: 🍎
+            runs-on: macos-latest
+          - name: Windows
+            id: windows
+            emoji: 🪟
+            runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[watchmedo]' -r requirements-tests.txt
+
+      - name: Run tests with coverage
+        env:
+          COVERAGE_FILE: ".coverage.${{ matrix.os.id }}"
+        run: |
+          python -m pytest --cov=watchdog --cov-report=term
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os.name }}
+          path: .coverage.${{ matrix.os.id }}
+          include-hidden-files: true
+
+  report-coverage:
+    name: 📊 Combined Coverage & Summary
+    needs: test-coverage
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Download all OS coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Generate Coverage Report
+        run: |
+          pip install --break-system-packages "coverage[toml]"
+          coverage combine --keep .coverage.*
+          coverage json -o cov_global.json
+
+          python3 -c "
+          import os, json, subprocess, re
+
+          with open('cov_global.json') as f:
+              gd = json.load(f)
+          global_pct = f\"{gd['totals']['percent_covered']:.2f}%\"
+
+          os_rows = []
+          for name, emoji, fpath in [('Linux', '🐧', '.coverage.linux'), ('macOS', '🍎', '.coverage.macos'), ('Windows', '🪟', '.coverage.windows')]:
+              if os.path.exists(fpath):
+                  subprocess.run(['coverage', 'json', f'--data-file={fpath}', '-o', f'cov_{name}.json'], check=False)
+                  with open(f'cov_{name}.json') as f:
+                      os_rows.append(f'| {emoji} {name} | ✅ Passed | **{json.load(f)[\"totals\"][\"percent_covered\"]:.2f}%** |')
+              else:
+                  os_rows.append(f'| {emoji} {name} | ❌ Missing | N/A |')
+
+          diff_msg = '> _This PR does not seem to contain any modification to coverable code._\n\n'
+          try:
+              diff = subprocess.run(['git', 'diff', 'origin/master...HEAD'], capture_output=True, text=True).stdout
+              mod_lines, cur = {}, None
+              for line in diff.splitlines():
+                  if line.startswith('+++ b/'): cur = line[6:]
+                  elif line.startswith('@@') and cur:
+                      m = re.search(r'\+([0-9]+)(?:,([0-9]+))?', line)
+                      if m: mod_lines.setdefault(cur, set()).update(range(int(m.group(1)), int(m.group(1)) + (int(m.group(2)) if m.group(2) else 1)))
+              
+              tot, cov = 0, 0
+              for fp, finfo in gd.get('files', {}).items():
+                  rel = 'src/watchdog/' + fp.replace('\\\\', '/').split('src/watchdog/')[-1] if 'src/watchdog/' in fp else fp
+                  if rel in mod_lines:
+                      stmts = set(finfo.get('executed_lines', [])) | set(finfo.get('missing_lines', []))
+                      for l in mod_lines[rel]:
+                          if l in stmts:
+                              tot += 1
+                              if l in finfo.get('executed_lines', []): cov += 1
+              if tot > 0:
+                  diff_msg = f'### 🎯 PR Diff Coverage: **{(cov/tot)*100:.1f}%** ({cov}/{tot} statements covered)\n\n'
+          except Exception: pass
+
+          md = f'## 📊 Code Coverage Report\n\n### 🌐 Multi-OS Combined Coverage: **{global_pct}**\n\n{diff_msg}'
+          md += '### 🖥️ OS-Level Breakdown\n| OS | Status | Coverage |\n| :--- | :---: | :---: |\n' + '\n'.join(os_rows)
+          md += '\n\n<!-- watchdog-coverage-comment -->\n'
+          open('coverage_comment.md', 'w').write(md)
+          "
+
+      - name: Post or Update PR Comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cat coverage_comment.md >> $GITHUB_STEP_SUMMARY
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" --jq '.[] | select(.body | contains("<!-- watchdog-coverage-comment -->")) | .id' | tail -n 1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" -X PATCH -F body=@coverage_comment.md
+          else
+            gh pr comment $PR_NUMBER -F coverage_comment.md
+          fi
+
+
+

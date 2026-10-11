@@ -27,3 +27,24 @@ def test_nondelayed_get():
     elapsed = time() - inserted
     # Far less than 1 second
     assert elapsed < 1
+
+
+def test_delayed_queue_find_and_remove():
+    q = DelayedQueue[str](2)
+    q.put("apple", delay=True)
+    q.put("banana", delay=True)
+    q.put("cherry", delay=True)
+
+    # Test find
+    assert q.find(lambda x: x == "banana") == "banana"
+    assert q.find(lambda x: x == "orange") is None
+
+    # Test remove
+    removed = q.remove(lambda x: x == "banana")
+    assert removed == "banana"
+    assert q.find(lambda x: x == "banana") is None
+
+    # Verify remaining
+    assert q.find(lambda x: x == "cherry") == "cherry"
+    q.close()
+    assert q.get() is None
