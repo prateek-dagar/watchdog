@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-
+import platform as sys_platform
 from watchdog.utils import platform
 
-if not platform.is_bsd() and not platform.is_darwin():
-    pytest.skip("BSD/macOS only.", allow_module_level=True)
+if (not platform.is_bsd() and not platform.is_darwin()) or sys_platform.python_implementation() == "PyPy":
+    pytest.skip("BSD/macOS and CPython only.", allow_module_level=True)
 
 import errno
 import os

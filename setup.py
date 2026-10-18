@@ -2,7 +2,7 @@ import importlib.util
 import sys
 import os
 import os.path
-from platform import machine
+from platform import machine, python_implementation
 from setuptools import setup, find_packages
 from setuptools.extension import Extension
 from setuptools.command.build_ext import build_ext
@@ -21,6 +21,17 @@ spec.loader.exec_module(version)
 # The FORCE_MACOS_MACHINE envar, when set to 1, will force the compilation.
 _apple_devices = ("appletv", "iphone", "ipod", "ipad", "watch")
 is_macos = sys.platform == "darwin" and not machine().lower().startswith(_apple_devices)
+
+# PyPy 3.9 on macOS arm64 defaults to an invalid 10.13 deployment target; fix it to 11.0
+if (
+    is_macos
+    and machine().lower() in ("arm64", "aarch64")
+    and python_implementation() == "PyPy"
+    and sys.version_info[:2] == (3, 9)
+    and "MACOSX_DEPLOYMENT_TARGET" not in os.environ
+):
+    os.environ["MACOSX_DEPLOYMENT_TARGET"] = "11.0"
+
 
 ext_modules = []
 if is_macos or os.getenv("FORCE_MACOS_MACHINE", "0") == "1":
