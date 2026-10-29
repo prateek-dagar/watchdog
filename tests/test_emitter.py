@@ -607,7 +607,7 @@ def test_move_nested_subdirectories_on_windows(
     touch(p("dir2/dir3", "a"))
 
     with events_checker() as ec:
-        ec.add(FileModifiedEvent, "dir2/dir3/a")
+        ec.add((FileModifiedEvent, FileAttribEvent), "dir2/dir3/a")
 
 
 @pytest.mark.skipif(platform.is_bsd(), reason="BSD create another set of events for this test")
@@ -648,7 +648,7 @@ def test_file_lifecyle(
         else:
             ec.add(FileCreatedEvent, "a")
             if platform.is_windows():
-                ec.add(FileModifiedEvent, "a")
+                ec.add((FileModifiedEvent, FileAttribEvent), "a")
             else:
                 ec.add(FileAttribEvent, "a")
             ec.add(FileMovedEvent, "a", dest_path="b")

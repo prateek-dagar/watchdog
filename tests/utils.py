@@ -119,7 +119,7 @@ class _ExpectedEvent:
     everything else is optional (not checked if it is None).
     """
 
-    expected_class: type
+    expected_class: type | tuple[type, ...]
     src_path: str | None = None
     dest_path: str | None = None
 
@@ -162,7 +162,9 @@ class _EventsChecker:
         path = os.path.join(self.tmp, *parts)
         return os.path.normpath(path)
 
-    def add(self, expected_class: type, src_path: str | None = None, dest_path: str | None = None) -> None:
+    def add(
+        self, expected_class: type | tuple[type, ...], src_path: str | None = None, dest_path: str | None = None
+    ) -> None:
         """Add details for an expected event.  The `expected_class` argument
         is required, everything else is optional.  The order that events are
         received does not matter but adding the same kind of event more than
@@ -205,7 +207,12 @@ class _EventsChecker:
             if self._verbose:
                 self._debug("missing:")
                 for e in expected_events:
-                    self._debug("  ", e.expected_class.__name__, e.src_path)
+                    cls_name = (
+                        e.expected_class.__name__
+                        if hasattr(e.expected_class, "__name__")
+                        else "/".join(getattr(c, "__name__", str(c)) for c in e.expected_class)
+                    )
+                    self._debug("  ", cls_name, e.src_path)
             assert not expected_events, "some expected events not found"
         if not self._allow_extra:  # noqa: SIM102
             # Check that we did not receive extra events
