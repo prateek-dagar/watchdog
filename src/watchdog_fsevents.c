@@ -516,8 +516,9 @@ runs that loop until stop() is called. Returns immediately if stop() was already
 called. callback(paths, inodes, flags, ids) is invoked on the calling thread;\n\
 started(), if given, is called once the stream has been started.");
 static PyObject *
-Stream_run(StreamObject *self, PyObject *args, PyObject *kwds)
+Stream_run(PyObject *instance, PyObject *args, PyObject *kwds)
 {
+    StreamObject *self = (StreamObject *)instance;
     static char *kwlist[] = {"callback", "started", NULL};
     PyObject *callback = NULL;
     PyObject *started = Py_None;
@@ -599,9 +600,10 @@ PyDoc_STRVAR(Stream_stop__doc__,
 Makes a running run() return and a future run() return immediately. May be\n\
 called from any thread, including from inside the callback.");
 static PyObject *
-Stream_stop(StreamObject *self, PyObject *unused)
+Stream_stop(PyObject *instance, PyObject *unused)
 {
     UNUSED(unused);
+    StreamObject *self = (StreamObject *)instance;
     stream_stop(self);
     Py_RETURN_NONE;
 }

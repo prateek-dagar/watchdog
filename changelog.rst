@@ -10,7 +10,7 @@ Changelog
 
 **Other Changes**
 
-- xxx (`#ISSUEID <https://github.com/gorakhargosh/watchdog/issues/ISSUEID>`__, thanks to @yournick)
+- [fsevents] Fix ``-Wcast-function-type-mismatch`` compiler warning when building the macOS extension. (`#1411 <https://github.com/gorakhargosh/watchdog/issues/1411>`__)
 
 7.1.0
 ~~~~~
