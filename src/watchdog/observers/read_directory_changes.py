@@ -86,7 +86,10 @@ class WindowsApiEmitter(EventEmitter):
                 dest_path = src_path
                 src_path = self._last_renamed_src_path
                 self._last_renamed_src_path = ""
-                if os.path.isdir(dest_path):
+                is_dir = (
+                    winapi_event.is_directory if winapi_event.is_directory is not None else os.path.isdir(dest_path)
+                )
+                if is_dir:
                     self.queue_event(DirMovedEvent(src_path, dest_path))
                     if self.watch.is_recursive:
                         for sub_moved_event in generate_sub_moved_events(src_path, dest_path):
@@ -94,17 +97,22 @@ class WindowsApiEmitter(EventEmitter):
                 else:
                     self.queue_event(FileMovedEvent(src_path, dest_path))
             elif winapi_event.is_attrib:
-                self.queue_event((DirAttribEvent if os.path.isdir(src_path) else FileAttribEvent)(src_path))
+                is_dir = winapi_event.is_directory if winapi_event.is_directory is not None else os.path.isdir(src_path)
+                self.queue_event((DirAttribEvent if is_dir else FileAttribEvent)(src_path))
             elif winapi_event.is_modified:
-                self.queue_event((DirModifiedEvent if os.path.isdir(src_path) else FileModifiedEvent)(src_path))
+                is_dir = winapi_event.is_directory if winapi_event.is_directory is not None else os.path.isdir(src_path)
+                self.queue_event((DirModifiedEvent if is_dir else FileModifiedEvent)(src_path))
             elif winapi_event.is_added:
-                isdir = os.path.isdir(src_path)
-                self.queue_event((DirCreatedEvent if isdir else FileCreatedEvent)(src_path))
-                if isdir and self.watch.is_recursive:
+                is_dir = winapi_event.is_directory if winapi_event.is_directory is not None else os.path.isdir(src_path)
+                self.queue_event((DirCreatedEvent if is_dir else FileCreatedEvent)(src_path))
+                if is_dir and self.watch.is_recursive:
                     for sub_created_event in generate_sub_created_events(src_path):
                         self.queue_event(sub_created_event)
             elif winapi_event.is_removed:
-                self.queue_event(FileDeletedEvent(src_path))
+                if winapi_event.is_directory:
+                    self.queue_event(DirDeletedEvent(src_path))
+                else:
+                    self.queue_event(FileDeletedEvent(src_path))
             elif winapi_event.is_removed_self:
                 self.queue_event(DirDeletedEvent(self.watch.path))
                 should_stop = True

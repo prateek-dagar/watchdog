@@ -40,6 +40,7 @@ FILE_NOTIFY_CHANGE_SECURITY = 0x0100
 
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 FILE_FLAG_OVERLAPPED = 0x40000000
+FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 FILE_LIST_DIRECTORY = 1
 FILE_SHARE_READ = 0x01
 FILE_SHARE_WRITE = 0x02
@@ -344,17 +345,28 @@ def _parse_event_buffer(read_buffer: bytes) -> list[tuple[int, str]]:
     return results
 
 
-def _parse_extended_event_buffer(read_buffer: bytes) -> list[tuple[int, str, bool]]:
+# TODO: Refactor intermediate positional tuples by having _parse_extended_event_buffer
+# and _parse_event_buffer construct and return WinAPINativeEvent instances directly.
+# This avoids intermediate tuple allocations and prevents fragile unpacking as fields expand.
+#
+# TODO: Leverage additional FILE_NOTIFY_EXTENDED_INFORMATION fields in future work:
+# - FileId: Pair cross-directory moves (FILE_ACTION_REMOVED + FILE_ACTION_ADDED) by matching
+#   identical 64-bit NTFS FileIds (#158), and provide unique file identity for #1010.
+# - ReparsePointTag: Detect symlinks (IO_REPARSE_TAG_SYMLINK) and directory junctions
+#   (IO_REPARSE_TAG_MOUNT_POINT) directly from buffer without extra os.path.islink() syscalls.
+# - FileSize: Provide file sizes directly without os.stat() calls.
+def _parse_extended_event_buffer(read_buffer: bytes) -> list[tuple[int, str, bool, bool]]:
     """Parse a buffer of ``FILE_NOTIFY_EXTENDED_INFORMATION`` structures.
 
     :param read_buffer:
         The raw byte buffer returned by ``ReadDirectoryChangesExW``.
     :returns:
-        A list of ``(action, filename, is_attrib)`` tuples, where ``is_attrib``
+        A list of ``(action, filename, is_attrib, is_directory)`` tuples, where ``is_attrib``
         is ``True`` when the record indicates a metadata/attribute modification
         (i.e. ``FILE_ACTION_MODIFIED`` where ``LastChangeTime`` is greater than
         ``LastModificationTime``), distinguishing metadata modifications from
-        content writes.
+        content writes, and ``is_directory`` is ``True`` when the target has the
+        ``FILE_ATTRIBUTE_DIRECTORY`` flag set.
     """
     n_bytes = len(read_buffer)
     results = []
@@ -363,7 +375,8 @@ def _parse_extended_event_buffer(read_buffer: bytes) -> list[tuple[int, str, boo
         ptr = ctypes.addressof(fnei) + FileNotifyExtendedInformation.FileName.offset
         filename = ctypes.string_at(ptr, fnei.FileNameLength)
         is_attrib = fnei.Action == FILE_ACTION_MODIFIED and fnei.LastChangeTime > fnei.LastModificationTime
-        results.append((fnei.Action, filename.decode("utf-16-le"), is_attrib))
+        is_directory = bool(fnei.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        results.append((fnei.Action, filename.decode("utf-16-le"), is_attrib, is_directory))
         num_to_skip = fnei.NextEntryOffset
         if num_to_skip <= 0:
             break
@@ -405,7 +418,7 @@ def _generate_observed_path_deleted_event(*, extended: bool = False) -> bytes:
             0,
             0,
             0,
-            0,
+            FILE_ATTRIBUTE_DIRECTORY,
             0,
             0,
             0,
@@ -459,11 +472,14 @@ class WinAPINativeEvent:
     :param src_path: The relative source path of the affected file or directory.
     :param is_attrib: Indicates whether the event is an attribute/metadata change
                       rather than a content modification.
+    :param is_directory: Indicates whether the event target is a directory when
+                         extended information is available.
     """
 
     action: int
     src_path: str
     is_attrib: bool = False
+    is_directory: bool | None = None
 
     @property
     def is_added(self) -> bool:
@@ -658,9 +674,9 @@ class DirectoryChangeReader:
             if not buf:
                 continue
             if is_extended:
-                for action, src_path, is_attrib in _parse_extended_event_buffer(buf):
-                    events.append(WinAPINativeEvent(action, src_path, is_attrib=is_attrib))
+                for action, src_path, is_attrib, is_directory in _parse_extended_event_buffer(buf):
+                    events.append(WinAPINativeEvent(action, src_path, is_attrib=is_attrib, is_directory=is_directory))
             else:
                 for action, src_path in _parse_event_buffer(buf):
-                    events.append(WinAPINativeEvent(action, src_path, is_attrib=False))
+                    events.append(WinAPINativeEvent(action, src_path, is_attrib=False, is_directory=None))
         return _drop_case_only_rename_deletions(events)

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from watchdog.events import DirCreatedEvent, DirMovedEvent, FileAttribEvent, FileMovedEvent
+from watchdog.events import DirCreatedEvent, DirDeletedEvent, DirMovedEvent, FileAttribEvent, FileMovedEvent
 from watchdog.observers.api import ObservedWatch
 from watchdog.utils import platform
 
@@ -376,7 +376,7 @@ def test_parse_extended_event_buffer_modified(last_change_time, last_mod_time, e
         + name
     )
     events = _parse_extended_event_buffer(buffer)
-    assert events == [(FILE_ACTION_MODIFIED, "test.txt", expected_attrib)]
+    assert events == [(FILE_ACTION_MODIFIED, "test.txt", expected_attrib, False)]
 
 
 def test_winapi_native_event_is_attrib():
@@ -389,10 +389,59 @@ def test_winapi_native_event_is_attrib():
     assert modified_event.is_modified
 
 
+def test_winapi_native_event_is_directory():
+    dir_event = WinAPINativeEvent(FILE_ACTION_DELETED, "subfolder", is_directory=True)
+    assert dir_event.is_directory
+
+    file_event = WinAPINativeEvent(FILE_ACTION_DELETED, "file.txt", is_directory=False)
+    assert not file_event.is_directory
+
+
+def test_parse_extended_event_buffer_directory_deleted():
+    name = "subfolder".encode("utf-16-le")
+    buffer = (
+        struct.pack(
+            "<IIqqqqqqIIqqI",
+            0,
+            FILE_ACTION_DELETED,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0x00000010,  # FILE_ATTRIBUTE_DIRECTORY
+            0,
+            0,
+            0,
+            len(name),
+        )
+        + name
+    )
+    events = _parse_extended_event_buffer(buffer)
+    assert events == [(FILE_ACTION_DELETED, "subfolder", False, True)]
+
+
+def test_emitter_queue_events_directory_deleted(event_queue, emitter):
+    """Deleting a directory under Windows emits DirDeletedEvent when extended info is available (#92)."""
+
+    class MockReader:
+        def get_events(self, timeout):
+            return [WinAPINativeEvent(FILE_ACTION_DELETED, "deleted_dir", is_directory=True)]
+
+        def stop(self):
+            pass
+
+    emitter._reader = MockReader()  # noqa: SLF001
+    emitter.queue_events(emitter.timeout)
+    event, _ = event_queue.get_nowait()
+    assert event == DirDeletedEvent(p("deleted_dir"))
+
+
 def test_generate_observed_path_deleted_event():
     buf_extended = _generate_observed_path_deleted_event(extended=True)
     events_extended = _parse_extended_event_buffer(buf_extended)
-    assert events_extended == [(FILE_ACTION_DELETED_SELF, ".", False)]
+    assert events_extended == [(FILE_ACTION_DELETED_SELF, ".", False, True)]
 
     buf_standard = _generate_observed_path_deleted_event(extended=False)
     events_standard = _parse_event_buffer(buf_standard)
