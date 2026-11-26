@@ -45,6 +45,22 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from typing import Any
 
+# C-level os.stat_result descriptors (constant for a given Python build/OS).
+_HAS_ST_FLAGS = hasattr(os.stat_result, "st_flags")
+_HAS_ST_FILE_ATTRIBUTES = hasattr(os.stat_result, "st_file_attributes")
+
+
+def _partition_paths(
+    paths: set[bytes | str],
+    stat_map: dict[bytes | str, os.stat_result],
+) -> tuple[list[bytes | str], list[bytes | str]]:
+    """Split a set of paths into (dirs, files) in a single pass."""
+    dirs: list[bytes | str] = []
+    files: list[bytes | str] = []
+    for path in paths:
+        (dirs if S_ISDIR(stat_map[path].st_mode) else files).append(path)
+    return dirs, files
+
 
 class DirectorySnapshotDiff:
     """Compares two directory snapshots and creates an object that represents
@@ -78,128 +94,189 @@ class DirectorySnapshotDiff:
         *,
         ignore_device: bool = False,
     ) -> None:
-        created = snapshot.paths - ref.paths
-        deleted = ref.paths - snapshot.paths
+        ref_stat = ref._stat_info  # noqa: SLF001
+        snap_stat = snapshot._stat_info  # noqa: SLF001
+        ref_keys = ref_stat.keys()
+        snap_keys = snap_stat.keys()
 
-        if ignore_device:
+        created: set[bytes | str] = set(snap_keys - ref_keys)
+        deleted: set[bytes | str] = set(ref_keys - snap_keys)
+        common = ref_keys & snap_keys
 
-            def get_inode(directory: DirectorySnapshot, full_path: bytes | str) -> int | tuple[int, int]:
-                return directory.inode(full_path)[0]
-
-        else:
-
-            def get_inode(directory: DirectorySnapshot, full_path: bytes | str) -> int | tuple[int, int]:
-                return directory.inode(full_path)
+        use_fast_inode = type(ref).inode is _DEFAULT_SNAPSHOT_INODE and type(snapshot).inode is _DEFAULT_SNAPSHOT_INODE
+        is_windows = platform.is_windows()
+        is_freebsd = sys.platform.startswith("freebsd")
+        use_fast_btime = (
+            not is_windows
+            and type(ref).birthtime in (_DEFAULT_SNAPSHOT_BIRTHTIME, EmptyDirectorySnapshot.birthtime)
+            and type(snapshot).birthtime in (_DEFAULT_SNAPSHOT_BIRTHTIME, EmptyDirectorySnapshot.birthtime)
+        )
+        ref_btimes: dict[bytes | str, int | None] | None = getattr(ref, "_birthtimes", None)
+        snap_btimes: dict[bytes | str, int | None] | None = getattr(snapshot, "_birthtimes", None)
 
         if ignore_device:
             # Retain each snapshot's canonical path when hard links share an inode.
-            ref_paths = {ref.inode(path)[0]: ref.path(ref.inode(path)) for path in ref.paths}
-            snapshot_paths = {snapshot.inode(path)[0]: snapshot.path(snapshot.inode(path)) for path in snapshot.paths}
+            if use_fast_inode:
+                ref_i2p = getattr(ref, "_inode_to_path", None)
+                snap_i2p = getattr(snapshot, "_inode_to_path", None)
+                ref_paths = (
+                    {st.st_ino: ref_i2p.get((st.st_ino, st.st_dev)) for st in ref_stat.values()} if ref_i2p else {}
+                )
+                snapshot_paths = (
+                    {st.st_ino: snap_i2p.get((st.st_ino, st.st_dev)) for st in snap_stat.values()} if snap_i2p else {}
+                )
+            else:
+                ref_paths = {ref.inode(path)[0]: ref.path(ref.inode(path)) for path in ref_keys}
+                snapshot_paths = {snapshot.inode(path)[0]: snapshot.path(snapshot.inode(path)) for path in snap_keys}
 
             def get_ref_path(uid: tuple[int, int]) -> bytes | str | None:
                 return ref.path(uid) or ref_paths.get(uid[0])
 
             def get_snapshot_path(uid: tuple[int, int]) -> bytes | str | None:
                 return snapshot.path(uid) or snapshot_paths.get(uid[0])
-
         else:
             get_ref_path = ref.path
             get_snapshot_path = snapshot.path
 
-        def is_same_entry(ref_path: bytes | str, new_path: bytes | str) -> bool:
+        def get_btime(
+            snap: DirectorySnapshot,
+            btimes: dict[bytes | str, int | None] | None,
+            path: bytes | str,
+        ) -> int | None:
+            if is_windows:
+                return None
+            if use_fast_btime and btimes is not None and (bt := btimes.get(path, ...)) is not ...:
+                return bt
+            return snap.birthtime(path)
+
+        def is_same_entry(
+            ref_path: bytes | str,
+            new_path: bytes | str,
+            ref_st: os.stat_result,
+            snap_st: os.stat_result,
+        ) -> bool:
             # A file cannot be renamed into a directory or vice versa (#303).
-            if ref.isdir(ref_path) != snapshot.isdir(new_path):
+            if S_ISDIR(ref_st.st_mode) != S_ISDIR(snap_st.st_mode):
                 return False
 
+            if is_windows:
+                return True
+
             # Compare available birth times to detect recycled inodes (#992).
-            ref_btime = ref.birthtime(ref_path)
-            new_btime = snapshot.birthtime(new_path)
+            ref_btime = get_btime(ref, ref_btimes, ref_path)
+            new_btime = get_btime(snapshot, snap_btimes, new_path)
             if ref_btime is not None and new_btime is not None:
                 # FreeBSD utimes(2) can lower birth time when mtime is backdated.
-                if ref_path == new_path and sys.platform.startswith("freebsd") and new_btime < ref_btime:
+                if ref_path == new_path and is_freebsd and new_btime < ref_btime:
                     return True
                 return ref_btime == new_btime
 
             return True
 
-        # Paths present in both snapshots may refer to different entries even
-        # when the inode has been reused. Treat those as replacements, too.
-        for path in ref.paths & snapshot.paths:
-            if get_inode(ref, path) != get_inode(snapshot, path) or not is_same_entry(path, path):
+        # Single pass over paths present in both snapshots:
+        # detect same-path replacements AND modifications/attribute changes.
+        modified: set[bytes | str] = set()
+        attrib: set[bytes | str] = set()
+        for path in common:
+            ref_st = ref_stat[path]
+            snap_st = snap_stat[path]
+            if use_fast_inode:
+                same_inode = ref_st.st_ino == snap_st.st_ino and (ignore_device or ref_st.st_dev == snap_st.st_dev)
+            elif ignore_device:
+                same_inode = ref.inode(path)[0] == snapshot.inode(path)[0]
+            else:
+                same_inode = ref.inode(path) == snapshot.inode(path)
+
+            if not same_inode or not is_same_entry(path, path, ref_st, snap_st):
                 created.add(path)
                 deleted.add(path)
+            else:
+                if ref_st.st_mtime != snap_st.st_mtime or ref_st.st_size != snap_st.st_size:
+                    modified.add(path)
+                if self.is_attrib_modified(ref_st, snap_st):
+                    attrib.add(path)
 
-        # find moved paths
+        # Find moved paths.
         moved: set[tuple[bytes | str, bytes | str]] = set()
-        for path in set(deleted):
-            inode = ref.inode(path)
+        for path in list(deleted):
+            ref_st = ref_stat[path]
+            inode = (ref_st.st_ino, ref_st.st_dev) if use_fast_inode else ref.inode(path)
             new_path = get_snapshot_path(inode)
             # Only treat this as a move if the inode is now reachable through a
             # genuinely new path. A symlink (or hard link) shares its target's
             # inode, so ``new_path`` may still point at the unchanged target,
             # which is not a move.
-            if (
-                new_path
-                and (new_path not in ref.paths or ref.inode(new_path) != inode)
-                and is_same_entry(path, new_path)
-            ):
-                # file is not deleted but moved
-                deleted.remove(path)
-                moved.add((path, new_path))
+            if new_path is not None:
+                ref_new_st = ref_stat.get(new_path)
+                if (
+                    ref_new_st is None
+                    or ((ref_new_st.st_ino, ref_new_st.st_dev) if use_fast_inode else ref.inode(new_path)) != inode
+                ) and is_same_entry(path, new_path, ref_st, snap_stat[new_path]):
+                    deleted.remove(path)
+                    moved.add((path, new_path))
 
-        for path in set(created):
-            inode = snapshot.inode(path)
+        for path in list(created):
+            snap_st = snap_stat[path]
+            inode = (snap_st.st_ino, snap_st.st_dev) if use_fast_inode else snapshot.inode(path)
             old_path = get_ref_path(inode)
             # Only treat this as a move if the inode's previous path is really
             # gone. A symlink (or hard link) shares its target's inode, so
             # ``old_path`` may still exist with that inode, which means this is a
             # creation, not a move.
-            if (
-                old_path
-                and (old_path not in snapshot.paths or snapshot.inode(old_path) != inode)
-                and is_same_entry(old_path, path)
-            ):
-                created.remove(path)
-                moved.add((old_path, path))
+            if old_path is not None:
+                snap_old_st = snap_stat.get(old_path)
+                if (
+                    snap_old_st is None
+                    or ((snap_old_st.st_ino, snap_old_st.st_dev) if use_fast_inode else snapshot.inode(old_path))
+                    != inode
+                ) and is_same_entry(old_path, path, ref_stat[old_path], snap_st):
+                    created.remove(path)
+                    moved.add((old_path, path))
 
         # A hard link can make the two inode lookups select different paths.
         # A move found in either pass must not also remain a create or delete.
         for old_path, new_path in moved:
             deleted.discard(old_path)
             created.discard(new_path)
-
-        # find modified paths
-        # first check paths that have not moved
-        modified: set[bytes | str] = set()
-        attrib: set[bytes | str] = set()
-        for path in ref.paths & snapshot.paths:
-            if get_inode(ref, path) == get_inode(snapshot, path) and is_same_entry(path, path):
-                if ref.mtime(path) != snapshot.mtime(path) or ref.size(path) != snapshot.size(path):
-                    modified.add(path)
-                if self.is_attrib_modified(ref.stat_info(path), snapshot.stat_info(path)):
-                    attrib.add(path)
-
-        for old_path, new_path in moved:
-            if ref.mtime(old_path) != snapshot.mtime(new_path) or ref.size(old_path) != snapshot.size(new_path):
+            ref_st = ref_stat[old_path]
+            snap_st = snap_stat[new_path]
+            if ref_st.st_mtime != snap_st.st_mtime or ref_st.st_size != snap_st.st_size:
                 modified.add(old_path)
-            if self.is_attrib_modified(ref.stat_info(old_path), snapshot.stat_info(new_path)):
+            if self.is_attrib_modified(ref_st, snap_st):
                 attrib.add(old_path)
 
-        self._dirs_created = [path for path in created if snapshot.isdir(path)]
-        self._dirs_deleted = [path for path in deleted if ref.isdir(path)]
-        self._dirs_modified = [path for path in modified if ref.isdir(path)]
-        self._dirs_moved = [(frm, to) for (frm, to) in moved if ref.isdir(frm)]
-        self._dirs_attrib = [path for path in attrib if ref.isdir(path)]
+        self._dirs_created, self._files_created = _partition_paths(created, snap_stat)
+        self._dirs_deleted, self._files_deleted = _partition_paths(deleted, ref_stat)
+        self._dirs_modified, self._files_modified = _partition_paths(modified, ref_stat)
+        self._dirs_attrib, self._files_attrib = _partition_paths(attrib, ref_stat)
 
-        self._files_created = list(created - set(self._dirs_created))
-        self._files_deleted = list(deleted - set(self._dirs_deleted))
-        self._files_modified = list(modified - set(self._dirs_modified))
-        self._files_moved = list(moved - set(self._dirs_moved))
-        self._files_attrib = list(attrib - set(self._dirs_attrib))
+        dirs_moved: list[tuple[bytes | str, bytes | str]] = []
+        files_moved: list[tuple[bytes | str, bytes | str]] = []
+        for item in moved:
+            (dirs_moved if S_ISDIR(ref_stat[item[0]].st_mode) else files_moved).append(item)
+        self._dirs_moved = dirs_moved
+        self._files_moved = files_moved
 
     @staticmethod
     def is_attrib_modified(ref_stat: os.stat_result, snap_stat: os.stat_result) -> bool:
         """Determines whether permissions, file attributes, or ownership have changed."""
+        if type(ref_stat) is os.stat_result and type(snap_stat) is os.stat_result:
+            if (
+                ref_stat.st_mode != snap_stat.st_mode
+                or ref_stat.st_uid != snap_stat.st_uid
+                or ref_stat.st_gid != snap_stat.st_gid
+            ):
+                return True
+            if _HAS_ST_FLAGS:
+                ref_any: Any = ref_stat
+                snap_any: Any = snap_stat
+                if ref_any.st_flags != snap_any.st_flags:
+                    return True
+            if _HAS_ST_FILE_ATTRIBUTES:
+                ref_any = ref_stat
+                snap_any = snap_stat
+                return bool(ref_any.st_file_attributes != snap_any.st_file_attributes)
+            return False
         return (
             # File mode and permission bits (e.g. chmod, read/write/execute bits)
             getattr(ref_stat, "st_mode", None) != getattr(snap_stat, "st_mode", None)
@@ -236,7 +313,18 @@ class DirectorySnapshotDiff:
         )
 
     def __len__(self) -> int:
-        return sum(len(getattr(self, attr)) for attr in dir(self) if attr.startswith(("_dirs_", "_files_")))
+        return (
+            len(self._files_created)
+            + len(self._files_deleted)
+            + len(self._files_modified)
+            + len(self._files_moved)
+            + len(self._files_attrib)
+            + len(self._dirs_created)
+            + len(self._dirs_deleted)
+            + len(self._dirs_modified)
+            + len(self._dirs_moved)
+            + len(self._dirs_attrib)
+        )
 
     @property
     def files_created(self) -> list[bytes | str]:
@@ -533,6 +621,11 @@ class DirectorySnapshot:
 
     def __repr__(self) -> str:
         return str(self._stat_info)
+
+
+# Bound after class definition so DirectorySnapshotDiff detects both subclass overrides and unittest.mock.patch.object.
+_DEFAULT_SNAPSHOT_INODE = DirectorySnapshot.inode
+_DEFAULT_SNAPSHOT_BIRTHTIME = DirectorySnapshot.birthtime
 
 
 class EmptyDirectorySnapshot(DirectorySnapshot):
